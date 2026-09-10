@@ -492,6 +492,7 @@ function AdminApp({ profile, token, onLogout }) {
   const totalSavings = savingsAll.reduce((s, r) => s + Number(r.balance), 0);
   const totalShares = sharesAll.reduce((s, r) => s + Number(r.balance), 0);
   const totalOutstanding = loansAll.filter(l => l.status === 'active').reduce((s, r) => s + Number(r.outstanding_balance || 0), 0);
+  const pendingMembers = profiles.filter(p => p.status === 'pending');
   const pendingLoans = loansAll.filter(l => l.status === 'pending');
   const activeLoans = loansAll.filter(l => l.status === 'active');
 
@@ -567,6 +568,17 @@ function AdminApp({ profile, token, onLogout }) {
     await sb(`/rest/v1/profiles?id=eq.${m.id}`, { method: 'PATCH', token, headers: { Prefer: 'return=minimal' }, body: { status: newStatus } });
     await load();
   }
+  async function approveMember(m) {
+    await sb(`/rest/v1/profiles?id=eq.${m.id}`, { method: 'PATCH', token, headers: { Prefer: 'return=minimal' }, body: { status: 'active' } });
+    await load();
+  }
+  async function setMemberRole(m, newRole) {
+    if (newRole === m.role) return;
+    const verb = newRole === 'admin' ? 'grant admin rights to' : 'remove admin rights from';
+    if (!window.confirm(`Are you sure you want to ${verb} ${m.full_name}?`)) return;
+    await sb(`/rest/v1/profiles?id=eq.${m.id}`, { method: 'PATCH', token, headers: { Prefer: 'return=minimal' }, body: { role: newRole } });
+    await load();
+  }
   async function declareDividend(year, totalPool) {
     const eligible = sharesAll.filter(r => Number(r.balance) > 0);
     if (totalShares <= 0 || eligible.length === 0) { alert('No members hold shares yet.'); return; }
@@ -606,6 +618,7 @@ function AdminApp({ profile, token, onLogout }) {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                   <StatCard label="Members" value={profiles.length} />
+                  <StatCard label="Pending approvals" value={pendingMembers.length} accent={pendingMembers.length ? THEME.gold : THEME.ink} />
                   <StatCard label="Pending loans" value={pendingLoans.length} accent={THEME.gold} />
                 </div>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -628,27 +641,65 @@ function AdminApp({ profile, token, onLogout }) {
             )}
 
             {tab === 'members' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {profiles.length === 0 ? <EmptyState text="No members yet." /> : profiles.map(m => (
-                  <Card key={m.id}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: 14 }}>{m.full_name}</div>
-                        <div style={{ fontSize: 12, color: THEME.inkSoft }}>{m.phone || 'No phone on file'}</div>
-                      </div>
-                      <Badge color={statusColor(m.status)}>{m.status}</Badge>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                {pendingMembers.length > 0 && (
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: THEME.gold }}>
+                      Awaiting approval ({pendingMembers.length})
                     </div>
-                    <div style={{ display: 'flex', gap: 16, marginTop: 10, fontSize: 12 }}>
-                      <span>Savings: <b>{fmt((savingsMap[m.id] || {}).balance)}</b></span>
-                      <span>Shares: <b>{fmt((sharesMap[m.id] || {}).balance)}</b></span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {pendingMembers.map(m => (
+                        <Card key={m.id} style={{ borderColor: THEME.gold }}>
+                          <div style={{ fontWeight: 700, fontSize: 14 }}>{m.full_name}</div>
+                          <div style={{ fontSize: 12, color: THEME.inkSoft }}>{m.phone || 'No phone on file'}</div>
+                          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                            <PrimaryButton style={{ flex: 1 }} onClick={() => approveMember(m)}>
+                              <Check size={14} /> Approve
+                            </PrimaryButton>
+                          </div>
+                        </Card>
+                      ))}
                     </div>
-                    {m.id !== profile.id && (
-                      <GhostButton style={{ marginTop: 10, width: '100%' }} onClick={() => toggleMemberStatus(m)}>
-                        {m.status === 'active' ? 'Suspend member' : 'Reactivate member'}
-                      </GhostButton>
-                    )}
-                  </Card>
-                ))}
+                  </div>
+                )}
+
+                <div>
+                  {pendingMembers.length > 0 && (
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>All members</div>
+                  )}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {profiles.filter(p => p.status !== 'pending').length === 0 ? <EmptyState text="No approved members yet." /> : profiles.filter(p => p.status !== 'pending').map(m => (
+                      <Card key={m.id}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: 14 }}>{m.full_name}</div>
+                            <div style={{ fontSize: 12, color: THEME.inkSoft }}>{m.phone || 'No phone on file'}</div>
+                          </div>
+                          <Badge color={statusColor(m.status)}>{m.status}</Badge>
+                        </div>
+                        <div style={{ display: 'flex', gap: 16, marginTop: 10, fontSize: 12 }}>
+                          <span>Savings: <b>{fmt((savingsMap[m.id] || {}).balance)}</b></span>
+                          <span>Shares: <b>{fmt((sharesMap[m.id] || {}).balance)}</b></span>
+                        </div>
+                        {m.id !== profile.id && (
+                          <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
+                            <select
+                              value={m.role}
+                              onChange={e => setMemberRole(m, e.target.value)}
+                              style={{ ...inputStyle, flex: 1, padding: '8px 10px', fontSize: 12 }}
+                            >
+                              <option value="member">Member</option>
+                              <option value="admin">Admin</option>
+                            </select>
+                            <GhostButton onClick={() => toggleMemberStatus(m)}>
+                              {m.status === 'active' ? 'Suspend' : 'Reactivate'}
+                            </GhostButton>
+                          </div>
+                        )}
+                      </Card>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -802,6 +853,34 @@ function DeclareDividendForm({ totalShares, onSubmit }) {
   );
 }
 
+/* -------------------------- pending / suspended -------------------------- */
+
+function AwaitingApprovalScreen({ profile, onLogout }) {
+  const isSuspended = profile.status === 'suspended';
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div style={{ width: '100%', maxWidth: 380, textAlign: 'center' }}>
+        <div style={{
+          width: 52, height: 52, borderRadius: 14,
+          background: isSuspended ? THEME.danger : THEME.gold,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px',
+        }}>
+          <ShieldCheck size={26} color="#fff" />
+        </div>
+        <h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 22, color: THEME.ink, margin: '0 0 10px' }}>
+          {isSuspended ? 'Account suspended' : 'Awaiting approval'}
+        </h1>
+        <p style={{ color: THEME.inkSoft, fontSize: 14, lineHeight: 1.5 }}>
+          {isSuspended
+            ? 'An admin has suspended this account. Contact your SACCO admin if you believe this is a mistake.'
+            : `Hi ${profile.full_name}, your account has been created but an admin still needs to approve it before you can sign in. Check back shortly, or contact your SACCO admin.`}
+        </p>
+        <GhostButton style={{ marginTop: 20 }} onClick={onLogout}>Sign out</GhostButton>
+      </div>
+    </div>
+  );
+}
+
 /* --------------------------------- app --------------------------------- */
 
 export default function App() {
@@ -822,6 +901,8 @@ export default function App() {
       `}</style>
       {!session || !profile ? (
         <AuthScreen onAuthed={(sess, prof) => { setSession(sess); setProfile(prof); }} />
+      ) : profile.status !== 'active' ? (
+        <AwaitingApprovalScreen profile={profile} onLogout={() => { setSession(null); setProfile(null); }} />
       ) : profile.role === 'admin' ? (
         <AdminApp profile={profile} token={session.access_token} onLogout={() => { setSession(null); setProfile(null); }} />
       ) : (

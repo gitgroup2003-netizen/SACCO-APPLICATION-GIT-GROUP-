@@ -693,7 +693,9 @@ function AdminApp({ profile, token, onLogout }) {
                   <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Recent transactions</div>
                   {txnsAll.length === 0 ? <EmptyState text="No transactions recorded yet." /> : txnsAll.slice(0, 20).map(t => (
                     <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: `1px solid ${THEME.line}`, fontSize: 12 }}>
-                      <span>{(profileMap[t.member_id] || {}).full_name || 'Member'} · <span style={{ textTransform: 'capitalize' }}>{t.type.replace('_', ' ')}</span></span>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0, marginRight: 8 }}>
+                        {(profileMap[t.member_id] || {}).full_name || 'Member'} · <span style={{ textTransform: 'capitalize' }}>{t.type.replace('_', ' ')}</span>
+                      </span>
                       <b>{fmt(t.amount)}</b>
                     </div>
                   ))}
@@ -810,7 +812,10 @@ export default function App() {
     <div style={{ minHeight: '100vh', background: THEME.paper, fontFamily: 'Inter, sans-serif', color: THEME.ink }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap');
-        * { box-sizing: border-box; }
+        * { box-sizing: border-box; min-width: 0; }
+        html, body { margin: 0; padding: 0; width: 100%; max-width: 100vw; overflow-x: hidden; }
+        #root { width: 100%; max-width: 100vw; overflow-x: hidden; }
+        img, svg { max-width: 100%; }
         .spin { animation: spin 1s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
         input:focus, select:focus { border-color: ${THEME.pine} !important; }

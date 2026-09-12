@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Home, Landmark, Wallet, Users, LogOut, Plus, Check, X, ArrowUpRight,
-  ArrowDownRight, Loader2, ShieldCheck, PieChart as PieIcon, Gift
+  ArrowDownRight, Loader2, ShieldCheck, PieChart as PieIcon, Gift, FileText, Printer
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
@@ -32,6 +32,24 @@ function fmtDate(d) {
   if (!d) return '—';
   return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
+function fmtDateTime(d) {
+  if (!d) return '—';
+  const dt = new Date(d);
+  return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) +
+    ' · ' + dt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+}
+function shortId(id) {
+  if (!id) return '—';
+  return id.slice(0, 8).toUpperCase();
+}
+const PAYMENT_MODES = [
+  { value: 'cash', label: 'Cash' },
+  { value: 'mobile_money', label: 'Mobile money' },
+  { value: 'bank_transfer', label: 'Bank transfer' },
+  { value: 'cheque', label: 'Cheque' },
+  { value: 'payroll', label: 'Payroll deduction' },
+  { value: 'other', label: 'Other' },
+];
 function statusColor(status) {
   const map = {
     active: THEME.success, approved: THEME.success, completed: THEME.success,
@@ -253,6 +271,72 @@ function AuthScreen({ onAuthed }) {
   );
 }
 
+function StatementModal({ profile, savings, shares, txns, onClose }) {
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(22,36,31,0.55)', zIndex: 50,
+      display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+    }}>
+      <div style={{
+        background: THEME.surface, width: '100%', maxWidth: 480, maxHeight: '88vh', overflowY: 'auto',
+        borderRadius: '18px 18px 0 0', padding: 20,
+      }} className="statement-sheet">
+        <div className="statement-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Mini statement</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <GhostButton onClick={() => window.print()}><Printer size={14} /> Print / Save PDF</GhostButton>
+            <GhostButton onClick={onClose}><X size={14} /></GhostButton>
+          </div>
+        </div>
+        <div id="statement-print-area">
+          <div style={{ textAlign: 'center', marginBottom: 14 }}>
+            <div style={{ fontFamily: 'Fraunces, serif', fontSize: 18, color: THEME.pine }}>Amani SACCO</div>
+            <div style={{ fontSize: 12, color: THEME.inkSoft }}>Member mini statement · generated {fmtDateTime(new Date())}</div>
+          </div>
+          <div style={{ background: THEME.paper, borderRadius: 10, padding: 12, marginBottom: 14, fontSize: 12 }}>
+            <div><b>{profile.full_name}</b></div>
+            <div style={{ color: THEME.inkSoft }}>{profile.phone || 'No phone on file'}</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
+              <span>Savings balance</span><b>{fmt(savings.balance)}</b>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>Shares balance</span><b>{fmt(shares.balance)}</b>
+            </div>
+          </div>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Last {txns.length} transactions</div>
+          {txns.length === 0 ? <EmptyState text="No transactions yet." /> : (
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {txns.map(t => {
+                const isCredit = ['deposit', 'loan_disbursement', 'dividend', 'share_purchase'].includes(t.type);
+                return (
+                  <div key={t.id} style={{ padding: '8px 0', borderBottom: `1px solid ${THEME.line}`, fontSize: 11.5 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600 }}>
+                      <span style={{ textTransform: 'capitalize' }}>{t.type.replace('_', ' ')}</span>
+                      <span style={{ color: isCredit ? THEME.success : THEME.danger }}>{isCredit ? '+' : '−'}{fmt(t.amount)}</span>
+                    </div>
+                    <div style={{ color: THEME.inkSoft, display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>
+                      <span>{fmtDateTime(t.created_at)} · {(t.payment_mode || 'cash').replace('_', ' ')}</span>
+                      <span>Bal: {fmt(t.balance_after)}</span>
+                    </div>
+                    <div style={{ color: THEME.inkSoft, fontFamily: 'monospace', marginTop: 1 }}>{shortId(t.id)}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #statement-print-area, #statement-print-area * { visibility: visible; }
+          #statement-print-area { position: absolute; top: 0; left: 0; width: 100%; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 /* ------------------------------ member app ------------------------------ */
 
 function MemberApp({ profile, token, onLogout }) {
@@ -265,6 +349,7 @@ function MemberApp({ profile, token, onLogout }) {
   const [divAlloc, setDivAlloc] = useState([]);
   const [divMap, setDivMap] = useState({});
   const [showLoanForm, setShowLoanForm] = useState(false);
+  const [showStatement, setShowStatement] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -377,7 +462,10 @@ function MemberApp({ profile, token, onLogout }) {
             {tab === 'activity' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <Card>
-                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Transactions</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>Transactions</div>
+                    <GhostButton onClick={() => setShowStatement(true)}><FileText size={14} /> Mini statement</GhostButton>
+                  </div>
                   {txns.length === 0 ? <EmptyState text="No transactions yet." /> : txns.map(t => <TxnRow key={t.id} t={t} />)}
                 </Card>
                 <Card>
@@ -396,29 +484,47 @@ function MemberApp({ profile, token, onLogout }) {
           </>
         )}
       </div>
+      {showStatement && (
+        <StatementModal profile={profile} savings={savings} shares={shares} txns={txns} onClose={() => setShowStatement(false)} />
+      )}
 
       <BottomNav tabs={tabs} active={tab} onChange={setTab} />
     </div>
   );
 }
 
-function TxnRow({ t }) {
+function TxnRow({ t, expandable = true }) {
+  const [open, setOpen] = useState(false);
   const isCredit = ['deposit', 'loan_disbursement', 'dividend', 'share_purchase'].includes(t.type);
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: `1px solid ${THEME.line}` }}>
-      <div style={{
-        width: 30, height: 30, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: (isCredit ? THEME.success : THEME.danger) + '1a',
-      }}>
-        {isCredit ? <ArrowDownRight size={15} color={THEME.success} /> : <ArrowUpRight size={15} color={THEME.danger} />}
+    <div style={{ borderBottom: `1px solid ${THEME.line}` }}>
+      <div
+        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', cursor: expandable ? 'pointer' : 'default' }}
+        onClick={() => expandable && setOpen(o => !o)}
+      >
+        <div style={{
+          width: 30, height: 30, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          background: (isCredit ? THEME.success : THEME.danger) + '1a',
+        }}>
+          {isCredit ? <ArrowDownRight size={15} color={THEME.success} /> : <ArrowUpRight size={15} color={THEME.danger} />}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, textTransform: 'capitalize' }}>{t.type.replace('_', ' ')}</div>
+          <div style={{ fontSize: 11, color: THEME.inkSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {fmtDateTime(t.created_at)}{t.notes ? ` · ${t.notes}` : ''}
+          </div>
+        </div>
+        <div style={{ fontWeight: 700, fontSize: 13, color: isCredit ? THEME.success : THEME.danger, whiteSpace: 'nowrap' }}>
+          {isCredit ? '+' : '−'}{fmt(t.amount)}
+        </div>
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, textTransform: 'capitalize' }}>{t.type.replace('_', ' ')}</div>
-        <div style={{ fontSize: 11, color: THEME.inkSoft }}>{fmtDate(t.created_at)}{t.notes ? ` · ${t.notes}` : ''}</div>
-      </div>
-      <div style={{ fontWeight: 700, fontSize: 13, color: isCredit ? THEME.success : THEME.danger, whiteSpace: 'nowrap' }}>
-        {isCredit ? '+' : '−'}{fmt(t.amount)}
-      </div>
+      {open && (
+        <div style={{ padding: '2px 0 12px 40px', fontSize: 12, color: THEME.inkSoft, display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <div>Transaction ID: <span style={{ fontFamily: 'monospace' }}>{shortId(t.id)}</span></div>
+          <div>Payment mode: <span style={{ textTransform: 'capitalize' }}>{(t.payment_mode || 'cash').replace('_', ' ')}</span></div>
+          <div>Balance after: <b style={{ color: THEME.ink }}>{fmt(t.balance_after)}</b></div>
+        </div>
+      )}
     </div>
   );
 }
@@ -458,7 +564,25 @@ function LoanApplyForm({ onSubmit, onCancel, maxCeiling = 0 }) {
 
 /* ------------------------------- admin app ------------------------------- */
 
+const ROLE_LABELS = {
+  manager: 'Manager', cashier: 'Cashier', loans_officer: 'Loans officer',
+  supervisor: 'Supervisor', board: 'Board', member: 'Member',
+};
+function getPerms(role) {
+  return {
+    manageRoles: role === 'manager',
+    approveAccounts: role === 'manager',
+    recordCash: role === 'manager' || role === 'cashier',
+    viewCash: role === 'manager' || role === 'cashier' || role === 'supervisor',
+    manageLoans: role === 'manager' || role === 'loans_officer',
+    viewLoans: role === 'manager' || role === 'loans_officer' || role === 'supervisor',
+    declareDividends: role === 'manager',
+    viewDividends: role === 'manager' || role === 'board' || role === 'supervisor',
+  };
+}
+
 function AdminApp({ profile, token, onLogout }) {
+  const perms = getPerms(profile.role);
   const [tab, setTab] = useState('overview');
   const [loading, setLoading] = useState(true);
   const [profiles, setProfiles] = useState([]);
@@ -536,7 +660,7 @@ function AdminApp({ profile, token, onLogout }) {
     });
     await load();
   }
-  async function recordTxn(memberId, type, amount, notes) {
+  async function recordTxn(memberId, type, amount, paymentMode, notes) {
     if (type === 'share_purchase') {
       const acct = sharesMap[memberId] || { balance: 0 };
       const newBal = Number(acct.balance) + Number(amount);
@@ -546,7 +670,7 @@ function AdminApp({ profile, token, onLogout }) {
       });
       await sb('/rest/v1/transactions', {
         method: 'POST', token, headers: { Prefer: 'return=minimal' },
-        body: { member_id: memberId, type, amount: Number(amount), balance_after: newBal, notes, created_by: profile.id },
+        body: { member_id: memberId, type, amount: Number(amount), balance_after: newBal, payment_mode: paymentMode, notes, created_by: profile.id },
       });
       await load();
       return;
@@ -559,7 +683,7 @@ function AdminApp({ profile, token, onLogout }) {
     });
     await sb('/rest/v1/transactions', {
       method: 'POST', token, headers: { Prefer: 'return=minimal' },
-      body: { member_id: memberId, type, amount: Number(amount), balance_after: newBal, notes, created_by: profile.id },
+      body: { member_id: memberId, type, amount: Number(amount), balance_after: newBal, payment_mode: paymentMode, notes, created_by: profile.id },
     });
     await load();
   }
@@ -574,8 +698,8 @@ function AdminApp({ profile, token, onLogout }) {
   }
   async function setMemberRole(m, newRole) {
     if (newRole === m.role) return;
-    const verb = newRole === 'admin' ? 'grant admin rights to' : 'remove admin rights from';
-    if (!window.confirm(`Are you sure you want to ${verb} ${m.full_name}?`)) return;
+    const verb = `change ${m.full_name}'s role from ${ROLE_LABELS[m.role] || m.role} to ${ROLE_LABELS[newRole] || newRole}`;
+    if (!window.confirm(`Are you sure you want to ${verb}?`)) return;
     await sb(`/rest/v1/profiles?id=eq.${m.id}`, { method: 'PATCH', token, headers: { Prefer: 'return=minimal' }, body: { role: newRole } });
     await load();
   }
@@ -601,15 +725,18 @@ function AdminApp({ profile, token, onLogout }) {
   const tabs = [
     { key: 'overview', label: 'Overview', icon: PieIcon },
     { key: 'members', label: 'Members', icon: Users },
-    { key: 'loans', label: 'Loans', icon: Landmark },
-    { key: 'transactions', label: 'Cash', icon: Wallet },
-    { key: 'dividends', label: 'Dividends', icon: Gift },
+    ...(perms.viewLoans ? [{ key: 'loans', label: 'Loans', icon: Landmark }] : []),
+    ...(perms.viewCash ? [{ key: 'transactions', label: 'Cash', icon: Wallet }] : []),
+    ...(perms.viewDividends ? [{ key: 'dividends', label: 'Dividends', icon: Gift }] : []),
   ];
+  useEffect(() => {
+    if (!tabs.some(t => t.key === tab)) setTab('overview');
+  }, [profile.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100vh', background: THEME.paper, display: 'flex', flexDirection: 'column' }}>
-      <Header title="Amani SACCO" subtitle={`Admin · ${profile.full_name}`} onLogout={onLogout}
-        roleBadge={<Badge color={THEME.gold}>admin</Badge>} />
+      <Header title="Amani SACCO" subtitle={`${ROLE_LABELS[profile.role] || profile.role} · ${profile.full_name}`} onLogout={onLogout}
+        roleBadge={<Badge color={profile.role === 'manager' ? THEME.gold : THEME.pine}>{ROLE_LABELS[profile.role] || profile.role}</Badge>} />
 
       <div style={{ flex: 1, padding: '0 20px 20px', overflowY: 'auto' }}>
         {loading ? <Spinner /> : (
@@ -653,9 +780,13 @@ function AdminApp({ profile, token, onLogout }) {
                           <div style={{ fontWeight: 700, fontSize: 14 }}>{m.full_name}</div>
                           <div style={{ fontSize: 12, color: THEME.inkSoft }}>{m.phone || 'No phone on file'}</div>
                           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                            <PrimaryButton style={{ flex: 1 }} onClick={() => approveMember(m)}>
-                              <Check size={14} /> Approve
-                            </PrimaryButton>
+                            {perms.approveAccounts ? (
+                              <PrimaryButton style={{ flex: 1 }} onClick={() => approveMember(m)}>
+                                <Check size={14} /> Approve
+                              </PrimaryButton>
+                            ) : (
+                              <div style={{ fontSize: 12, color: THEME.inkSoft }}>Only a manager can approve new accounts.</div>
+                            )}
                           </div>
                         </Card>
                       ))}
@@ -681,7 +812,7 @@ function AdminApp({ profile, token, onLogout }) {
                           <span>Savings: <b>{fmt((savingsMap[m.id] || {}).balance)}</b></span>
                           <span>Shares: <b>{fmt((sharesMap[m.id] || {}).balance)}</b></span>
                         </div>
-                        {m.id !== profile.id && (
+                        {m.id !== profile.id && perms.manageRoles && (
                           <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
                             <select
                               value={m.role}
@@ -689,12 +820,19 @@ function AdminApp({ profile, token, onLogout }) {
                               style={{ ...inputStyle, flex: 1, padding: '8px 10px', fontSize: 12 }}
                             >
                               <option value="member">Member</option>
-                              <option value="admin">Admin</option>
+                              <option value="cashier">Cashier</option>
+                              <option value="loans_officer">Loans officer</option>
+                              <option value="supervisor">Supervisor</option>
+                              <option value="board">Board</option>
+                              <option value="manager">Manager</option>
                             </select>
                             <GhostButton onClick={() => toggleMemberStatus(m)}>
                               {m.status === 'active' ? 'Suspend' : 'Reactivate'}
                             </GhostButton>
                           </div>
+                        )}
+                        {m.id !== profile.id && !perms.manageRoles && m.role !== 'member' && (
+                          <div style={{ marginTop: 8 }}><Badge color={THEME.pine}>{ROLE_LABELS[m.role] || m.role}</Badge></div>
                         )}
                       </Card>
                     ))}
@@ -717,10 +855,14 @@ function AdminApp({ profile, token, onLogout }) {
                           </div>
                           <div style={{ fontFamily: 'Fraunces, serif', fontSize: 18, marginTop: 4 }}>{fmt(l.principal)}</div>
                           <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 2 }}>{l.term_months} months{l.purpose ? ` · ${l.purpose}` : ''}</div>
-                          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                            <PrimaryButton style={{ flex: 1 }} onClick={() => approveLoan(l)}><Check size={14} /> Approve</PrimaryButton>
-                            <GhostButton style={{ flex: 1, borderColor: THEME.danger, color: THEME.danger }} onClick={() => rejectLoan(l)}><X size={14} style={{ marginRight: 4 }} />Reject</GhostButton>
-                          </div>
+                          {perms.manageLoans ? (
+                            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                              <PrimaryButton style={{ flex: 1 }} onClick={() => approveLoan(l)}><Check size={14} /> Approve</PrimaryButton>
+                              <GhostButton style={{ flex: 1, borderColor: THEME.danger, color: THEME.danger }} onClick={() => rejectLoan(l)}><X size={14} style={{ marginRight: 4 }} />Reject</GhostButton>
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 10 }}>View only — only a manager or loans officer can act on this.</div>
+                          )}
                         </Card>
                       ))}
                     </div>
@@ -730,7 +872,7 @@ function AdminApp({ profile, token, onLogout }) {
                   <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Active loans</div>
                   {activeLoans.length === 0 ? <EmptyState text="No active loans." /> : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      {activeLoans.map(l => <ActiveLoanRow key={l.id} loan={l} memberName={(profileMap[l.member_id] || {}).full_name} onRepay={recordRepayment} />)}
+                      {activeLoans.map(l => <ActiveLoanRow key={l.id} loan={l} memberName={(profileMap[l.member_id] || {}).full_name} onRepay={recordRepayment} readOnly={!perms.manageLoans} />)}
                     </div>
                   )}
                 </div>
@@ -739,15 +881,21 @@ function AdminApp({ profile, token, onLogout }) {
 
             {tab === 'transactions' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <RecordTxnForm members={profiles} onSubmit={recordTxn} />
+                {perms.recordCash && <RecordTxnForm members={profiles} onSubmit={recordTxn} />}
                 <Card>
                   <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Recent transactions</div>
                   {txnsAll.length === 0 ? <EmptyState text="No transactions recorded yet." /> : txnsAll.slice(0, 20).map(t => (
-                    <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: `1px solid ${THEME.line}`, fontSize: 12 }}>
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0, marginRight: 8 }}>
-                        {(profileMap[t.member_id] || {}).full_name || 'Member'} · <span style={{ textTransform: 'capitalize' }}>{t.type.replace('_', ' ')}</span>
-                      </span>
-                      <b>{fmt(t.amount)}</b>
+                    <div key={t.id} style={{ padding: '8px 0', borderBottom: `1px solid ${THEME.line}`, fontSize: 12 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0, marginRight: 8, fontWeight: 600 }}>
+                          {(profileMap[t.member_id] || {}).full_name || 'Member'} · <span style={{ textTransform: 'capitalize' }}>{t.type.replace('_', ' ')}</span>
+                        </span>
+                        <b>{fmt(t.amount)}</b>
+                      </div>
+                      <div style={{ color: THEME.inkSoft, fontSize: 11, marginTop: 2, display: 'flex', justifyContent: 'space-between' }}>
+                        <span>{fmtDateTime(t.created_at)} · <span style={{ textTransform: 'capitalize' }}>{(t.payment_mode || 'cash').replace('_', ' ')}</span></span>
+                        <span style={{ fontFamily: 'monospace' }}>{shortId(t.id)}</span>
+                      </div>
                     </div>
                   ))}
                 </Card>
@@ -756,7 +904,7 @@ function AdminApp({ profile, token, onLogout }) {
 
             {tab === 'dividends' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <DeclareDividendForm totalShares={totalShares} onSubmit={declareDividend} />
+                {perms.declareDividends && <DeclareDividendForm totalShares={totalShares} onSubmit={declareDividend} />}
                 <Card>
                   <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Past dividends</div>
                   {dividendsAll.length === 0 ? <EmptyState text="No dividends declared yet." /> : dividendsAll.map(d => (
@@ -777,7 +925,7 @@ function AdminApp({ profile, token, onLogout }) {
   );
 }
 
-function ActiveLoanRow({ loan, memberName, onRepay }) {
+function ActiveLoanRow({ loan, memberName, onRepay, readOnly = false }) {
   const [amount, setAmount] = useState('');
   const [busy, setBusy] = useState(false);
   return (
@@ -786,13 +934,15 @@ function ActiveLoanRow({ loan, memberName, onRepay }) {
         <div style={{ fontWeight: 700 }}>{memberName || 'Member'}</div>
         <span style={{ fontSize: 12, color: THEME.inkSoft }}>Outstanding {fmt(loan.outstanding_balance)}</span>
       </div>
-      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-        <input type="number" min="1" placeholder="Repayment amount" value={amount} onChange={e => setAmount(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
-        <PrimaryButton disabled={busy || !amount} onClick={async () => {
-          setBusy(true);
-          try { await onRepay(loan, amount); setAmount(''); } finally { setBusy(false); }
-        }}>{busy ? <Loader2 size={14} className="spin" /> : 'Record'}</PrimaryButton>
-      </div>
+      {!readOnly && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <input type="number" min="1" placeholder="Repayment amount" value={amount} onChange={e => setAmount(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+          <PrimaryButton disabled={busy || !amount} onClick={async () => {
+            setBusy(true);
+            try { await onRepay(loan, amount); setAmount(''); } finally { setBusy(false); }
+          }}>{busy ? <Loader2 size={14} className="spin" /> : 'Record'}</PrimaryButton>
+        </div>
+      )}
     </Card>
   );
 }
@@ -801,6 +951,7 @@ function RecordTxnForm({ members, onSubmit }) {
   const [memberId, setMemberId] = useState('');
   const [type, setType] = useState('deposit');
   const [amount, setAmount] = useState('');
+  const [paymentMode, setPaymentMode] = useState('cash');
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   return (
@@ -820,11 +971,16 @@ function RecordTxnForm({ members, onSubmit }) {
             <option value="share_purchase">Share purchase</option>
           </select>
         </Field>
+        <Field label="Mode of payment">
+          <select value={paymentMode} onChange={e => setPaymentMode(e.target.value)} style={inputStyle}>
+            {PAYMENT_MODES.map(pm => <option key={pm.value} value={pm.value}>{pm.label}</option>)}
+          </select>
+        </Field>
         <Field label="Amount (UGX)"><input type="number" min="1" value={amount} onChange={e => setAmount(e.target.value)} style={inputStyle} /></Field>
         <Field label="Notes"><input value={notes} onChange={e => setNotes(e.target.value)} style={inputStyle} placeholder="e.g. Mobile money confirmation code" /></Field>
         <PrimaryButton disabled={busy || !memberId || !amount} onClick={async () => {
           setBusy(true);
-          try { await onSubmit(memberId, type, amount, notes); setAmount(''); setNotes(''); } finally { setBusy(false); }
+          try { await onSubmit(memberId, type, amount, paymentMode, notes); setAmount(''); setNotes(''); } finally { setBusy(false); }
         }}>{busy ? <Loader2 size={15} className="spin" /> : 'Record transaction'}</PrimaryButton>
       </div>
     </Card>
@@ -903,7 +1059,7 @@ export default function App() {
         <AuthScreen onAuthed={(sess, prof) => { setSession(sess); setProfile(prof); }} />
       ) : profile.status !== 'active' ? (
         <AwaitingApprovalScreen profile={profile} onLogout={() => { setSession(null); setProfile(null); }} />
-      ) : profile.role === 'admin' ? (
+      ) : profile.role !== 'member' ? (
         <AdminApp profile={profile} token={session.access_token} onLogout={() => { setSession(null); setProfile(null); }} />
       ) : (
         <MemberApp profile={profile} token={session.access_token} onLogout={() => { setSession(null); setProfile(null); }} />

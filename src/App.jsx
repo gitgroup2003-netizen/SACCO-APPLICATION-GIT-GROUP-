@@ -1286,6 +1286,75 @@ function AwaitingApprovalScreen({ profile, onLogout }) {
   );
 }
 
+function CameraCapture({ onCapture }) {
+  const videoRef = React.useRef(null);
+  const streamRef = React.useRef(null);
+  const [active, setActive] = useState(false);
+  const [error, setError] = useState('');
+
+  async function startCamera() {
+    setError('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+      streamRef.current = stream;
+      setActive(true);
+      // video element mounts this render; attach once it exists
+      setTimeout(() => { if (videoRef.current) videoRef.current.srcObject = stream; }, 0);
+    } catch (err) {
+      setError('Could not access your camera. You can upload a photo instead.');
+    }
+  }
+
+  function stopCamera() {
+    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    setActive(false);
+  }
+
+  function capture() {
+    const video = videoRef.current;
+    if (!video) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    canvas.toBlob(blob => {
+      if (!blob) return;
+      const file = new File([blob], 'photo.jpg', { type: 'image/jpeg' });
+      onCapture(file);
+      stopCamera();
+    }, 'image/jpeg', 0.9);
+  }
+
+  useEffect(() => () => stopCamera(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (active) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, width: '100%' }}>
+        <video ref={videoRef} autoPlay playsInline muted style={{
+          width: '100%', maxWidth: 280, borderRadius: 14, background: '#000', transform: 'scaleX(-1)',
+        }} />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <PrimaryButton onClick={capture}><Camera size={14} /> Capture</PrimaryButton>
+          <GhostButton onClick={stopCamera}>Cancel</GhostButton>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+      <button onClick={startCamera} style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: THEME.pine,
+        border: `1px solid ${THEME.pine}`, borderRadius: 10, padding: '8px 14px', background: 'none', cursor: 'pointer',
+      }}>
+        <Camera size={14} /> Use my camera
+      </button>
+      {error && <div style={{ color: THEME.danger, fontSize: 11, textAlign: 'center' }}>{error}</div>}
+    </div>
+  );
+}
+
 function KycCompletionScreen({ profile, token, onDone, onLogout }) {
   const [nin, setNin] = useState(profile.nin || '');
   const [file, setFile] = useState(null);
@@ -1334,24 +1403,32 @@ function KycCompletionScreen({ profile, token, onDone, onLogout }) {
         <Card style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
             {preview ? (
-              <img src={preview} alt="Preview" style={{ width: 96, height: 96, borderRadius: '50%', objectFit: 'cover', border: `3px solid ${THEME.paper}`, boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }} />
+              <>
+                <img src={preview} alt="Preview" style={{ width: 96, height: 96, borderRadius: '50%', objectFit: 'cover', border: `3px solid ${THEME.paper}`, boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }} />
+                <GhostButton onClick={() => { setFile(null); setPreview(null); }}>Retake photo</GhostButton>
+              </>
             ) : (
-              <div style={{ width: 96, height: 96, borderRadius: '50%', background: THEME.paper, display: 'flex', alignItems: 'center', justifyContent: 'center', color: THEME.inkSoft, fontSize: 11, textAlign: 'center', padding: 8 }}>
-                No photo yet
-              </div>
+              <>
+                <div style={{ width: 96, height: 96, borderRadius: '50%', background: THEME.paper, display: 'flex', alignItems: 'center', justifyContent: 'center', color: THEME.inkSoft, fontSize: 11, textAlign: 'center', padding: 8 }}>
+                  No photo yet
+                </div>
+                <CameraCapture onCapture={handleFile} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', margin: '2px 0' }}>
+                  <div style={{ flex: 1, height: 1, background: THEME.line }} />
+                  <span style={{ fontSize: 11, color: THEME.inkSoft }}>or</span>
+                  <div style={{ flex: 1, height: 1, background: THEME.line }} />
+                </div>
+                <label style={{ cursor: 'pointer' }}>
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: THEME.inkSoft,
+                    border: `1px solid ${THEME.line}`, borderRadius: 10, padding: '8px 14px',
+                  }}>
+                    Upload a photo instead
+                  </span>
+                  <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => handleFile(e.target.files[0])} />
+                </label>
+              </>
             )}
-            <label style={{ cursor: 'pointer' }}>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: THEME.pine,
-                border: `1px solid ${THEME.pine}`, borderRadius: 10, padding: '8px 14px',
-              }}>
-                <Camera size={14} /> {preview ? 'Retake / choose again' : 'Take or upload a passport photo'}
-              </span>
-              <input type="file" accept="image/*" capture="user" style={{ display: 'none' }} onChange={e => handleFile(e.target.files[0])} />
-            </label>
-            <p style={{ fontSize: 11, color: THEME.inkSoft, textAlign: 'center', margin: 0 }}>
-              On a phone this opens your camera directly. On a computer it opens your file picker.
-            </p>
           </div>
           <Field label="National ID Number (NIN)">
             <input value={nin} onChange={e => setNin(e.target.value)} placeholder="e.g. CM12345678ABCD" style={inputStyle} />

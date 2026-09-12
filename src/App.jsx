@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Home, Landmark, Wallet, Users, LogOut, Plus, Check, X, ArrowUpRight,
-  ArrowDownRight, Loader2, ShieldCheck, PieChart as PieIcon, Gift, FileText, Printer
+  ArrowDownRight, Loader2, ShieldCheck, PieChart as PieIcon, Gift, FileText, Printer, Camera
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
@@ -78,6 +78,35 @@ async function sb(path, { method = 'GET', body, token, headers = {} } = {}) {
   return data;
 }
 
+async function uploadKycPhoto(token, userId, file) {
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/kyc-photos/${userId}/photo.jpg`, {
+    method: 'POST',
+    headers: { apikey: ANON_KEY, Authorization: `Bearer ${token}`, 'Content-Type': file.type || 'image/jpeg', 'x-upsert': 'true' },
+    body: file,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error('Photo upload failed: ' + text);
+  }
+  return `${userId}/photo.jpg`;
+}
+
+async function getSignedPhotoUrl(token, path) {
+  if (!path) return null;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/kyc-photos/${path}`, {
+      method: 'POST',
+      headers: { apikey: ANON_KEY, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expiresIn: 3600 }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.signedURL ? `${SUPABASE_URL}/storage/v1${data.signedURL}` : null;
+  } catch {
+    return null;
+  }
+}
+
 /* ---------------------------- shared bits ---------------------------- */
 
 function Field({ label, children }) {
@@ -104,9 +133,11 @@ function Badge({ children, color }) {
 function PrimaryButton({ children, onClick, disabled, type = 'button', style = {} }) {
   return (
     <button type={type} onClick={onClick} disabled={disabled} style={{
-      background: THEME.pine, color: '#fff', border: 'none', borderRadius: 10,
+      background: disabled ? THEME.inkSoft : `linear-gradient(135deg, ${THEME.pine}, ${THEME.pineDark})`,
+      color: '#fff', border: 'none', borderRadius: 10,
       padding: '10px 16px', fontWeight: 600, fontSize: 14, cursor: disabled ? 'default' : 'pointer',
       opacity: disabled ? 0.6 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+      boxShadow: disabled ? 'none' : '0 3px 10px rgba(15,61,58,0.28)', transition: 'transform 0.1s',
       ...style,
     }}>{children}</button>
   );
@@ -121,9 +152,29 @@ function GhostButton({ children, onClick, style = {} }) {
 }
 function Card({ children, style = {} }) {
   return (
-    <div style={{ background: THEME.surface, border: `1px solid ${THEME.line}`, borderRadius: 14, padding: 16, ...style }}>
+    <div style={{
+      background: THEME.surface, border: `1px solid ${THEME.line}`, borderRadius: 16, padding: 16,
+      boxShadow: '0 1px 3px rgba(15,61,58,0.06), 0 1px 2px rgba(15,61,58,0.04)', ...style,
+    }}>
       {children}
     </div>
+  );
+}
+function Avatar({ name, photoUrl, size = 40 }) {
+  const initials = (name || '?').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
+  if (photoUrl) {
+    return <img src={photoUrl} alt={name} style={{
+      width: size, height: size, borderRadius: '50%', objectFit: 'cover', flexShrink: 0,
+      border: `2px solid ${THEME.surface}`, boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+    }} />;
+  }
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: '50%', flexShrink: 0,
+      background: `linear-gradient(135deg, ${THEME.goldLight}, ${THEME.gold})`,
+      color: THEME.pineDark, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontWeight: 700, fontSize: Math.round(size * 0.38), fontFamily: 'Fraunces, serif',
+    }}>{initials}</div>
   );
 }
 function StatCard({ label, value, accent }) {
@@ -144,19 +195,30 @@ function Spinner() {
     </div>
   );
 }
-function Header({ title, subtitle, onLogout, roleBadge }) {
+function Header({ title, subtitle, onLogout, roleBadge, avatarUrl, avatarName }) {
   return (
-    <div style={{ padding: '20px 20px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 22, color: THEME.ink, margin: 0 }}>{title}</h1>
-          {roleBadge}
+    <div style={{
+      padding: '22px 20px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      background: `linear-gradient(135deg, ${THEME.pine}, ${THEME.pineDark})`, borderRadius: '0 0 24px 24px',
+      boxShadow: '0 4px 16px rgba(10,43,41,0.25)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+        <Avatar name={avatarName || title} photoUrl={avatarUrl} size={44} />
+        <div style={{ minWidth: 0 }}>
+          <h1 style={{
+            fontFamily: 'Fraunces, serif', fontSize: 19, color: '#fff', margin: 0,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{title}</h1>
+          <p style={{
+            color: 'rgba(255,255,255,0.72)', fontSize: 12, margin: '3px 0 0',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{subtitle}</p>
+          {roleBadge && <div style={{ marginTop: 6 }}>{roleBadge}</div>}
         </div>
-        <p style={{ color: THEME.inkSoft, fontSize: 13, margin: '4px 0 0' }}>{subtitle}</p>
       </div>
       <button onClick={onLogout} title="Sign out" style={{
-        background: THEME.surface, border: `1px solid ${THEME.line}`, borderRadius: 10, padding: 9, cursor: 'pointer',
-      }}><LogOut size={16} color={THEME.inkSoft} /></button>
+        background: 'rgba(255,255,255,0.14)', border: 'none', borderRadius: 10, padding: 9, cursor: 'pointer', flexShrink: 0,
+      }}><LogOut size={16} color="#fff" /></button>
     </div>
   );
 }
@@ -165,12 +227,13 @@ function BottomNav({ tabs, active, onChange }) {
     <div style={{
       position: 'sticky', bottom: 0, background: THEME.surface, borderTop: `1px solid ${THEME.line}`,
       display: 'flex', padding: '8px 8px calc(8px + env(safe-area-inset-bottom))',
+      boxShadow: '0 -2px 10px rgba(15,61,58,0.05)',
     }}>
       {tabs.map(t => (
         <button key={t.key} onClick={() => onChange(t.key)} style={{
-          flex: 1, background: 'none', border: 'none', cursor: 'pointer', display: 'flex',
-          flexDirection: 'column', alignItems: 'center', gap: 3, padding: '6px 0',
-          color: active === t.key ? THEME.pine : THEME.inkSoft,
+          flex: 1, background: active === t.key ? THEME.pine + '12' : 'none', border: 'none', cursor: 'pointer',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '7px 0', borderRadius: 10,
+          color: active === t.key ? THEME.pine : THEME.inkSoft, transition: 'background 0.15s',
         }}>
           <t.icon size={19} />
           <span style={{ fontSize: 11, fontWeight: 600 }}>{t.label}</span>
@@ -271,7 +334,7 @@ function AuthScreen({ onAuthed }) {
   );
 }
 
-function StatementModal({ profile, savings, shares, txns, onClose }) {
+function StatementModal({ profile, savings, shares, txns, certifiedRequest, onClose }) {
   return (
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(22,36,31,0.55)', zIndex: 50,
@@ -282,7 +345,7 @@ function StatementModal({ profile, savings, shares, txns, onClose }) {
         borderRadius: '18px 18px 0 0', padding: 20,
       }} className="statement-sheet">
         <div className="statement-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>Mini statement</div>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>{certifiedRequest ? 'Certified statement' : 'Mini statement'}</div>
           <div style={{ display: 'flex', gap: 8 }}>
             <GhostButton onClick={() => window.print()}><Printer size={14} /> Print / Save PDF</GhostButton>
             <GhostButton onClick={onClose}><X size={14} /></GhostButton>
@@ -293,6 +356,12 @@ function StatementModal({ profile, savings, shares, txns, onClose }) {
             <div style={{ fontFamily: 'Fraunces, serif', fontSize: 18, color: THEME.pine }}>Amani SACCO</div>
             <div style={{ fontSize: 12, color: THEME.inkSoft }}>Member mini statement · generated {fmtDateTime(new Date())}</div>
           </div>
+          {certifiedRequest && (
+            <div style={{ background: THEME.success + '14', border: `1px solid ${THEME.success}`, borderRadius: 10, padding: '10px 12px', marginBottom: 14, fontSize: 12, color: THEME.success, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <ShieldCheck size={16} />
+              <span>Approved and certified {fmtDateTime(certifiedRequest.decided_at)}. Reference: {shortId(certifiedRequest.id)}</span>
+            </div>
+          )}
           <div style={{ background: THEME.paper, borderRadius: 10, padding: 12, marginBottom: 14, fontSize: 12 }}>
             <div><b>{profile.full_name}</b></div>
             <div style={{ color: THEME.inkSoft }}>{profile.phone || 'No phone on file'}</div>
@@ -337,6 +406,100 @@ function StatementModal({ profile, savings, shares, txns, onClose }) {
   );
 }
 
+function MemberDetailModal({ memberId, token, onClose }) {
+  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState(null);
+  const [photoUrl, setPhotoUrl] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      const [pf, sa, sh, ln, tx, da] = await Promise.all([
+        sb(`/rest/v1/profiles?id=eq.${memberId}&select=*`, { token }),
+        sb(`/rest/v1/savings_accounts?member_id=eq.${memberId}&select=*`, { token }),
+        sb(`/rest/v1/shares?member_id=eq.${memberId}&select=*`, { token }),
+        sb(`/rest/v1/loans?member_id=eq.${memberId}&select=*&order=applied_at.desc`, { token }),
+        sb(`/rest/v1/transactions?member_id=eq.${memberId}&select=*&order=created_at.desc&limit=50`, { token }),
+        sb(`/rest/v1/dividend_allocations?member_id=eq.${memberId}&select=*`, { token }),
+      ]);
+      const p = (pf || [])[0];
+      if (p && p.photo_url) {
+        const url = await getSignedPhotoUrl(token, p.photo_url);
+        if (!cancelled) setPhotoUrl(url);
+      }
+      if (!cancelled) {
+        setData({ profile: p, savings: (sa || [])[0] || { balance: 0 }, shares: (sh || [])[0] || { balance: 0 }, loans: ln || [], txns: tx || [], divAlloc: da || [] });
+        setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [memberId, token]);
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(22,36,31,0.55)', zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+      <div style={{ background: THEME.surface, width: '100%', maxWidth: 480, maxHeight: '90vh', overflowY: 'auto', borderRadius: '18px 18px 0 0', padding: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Applicant profile</div>
+          <GhostButton onClick={onClose}><X size={14} /></GhostButton>
+        </div>
+        {loading || !data ? <Spinner /> : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <Avatar name={data.profile?.full_name} photoUrl={photoUrl} size={56} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>{data.profile?.full_name}</div>
+                <div style={{ fontSize: 12, color: THEME.inkSoft }}>{data.profile?.phone || 'No phone on file'}</div>
+                <div style={{ fontSize: 12, color: THEME.inkSoft }}>NIN: {data.profile?.nin || 'Not on file'}</div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 10 }}>
+              <StatCard label="Savings" value={fmt(data.savings.balance)} />
+              <StatCard label="Shares" value={fmt(data.shares.balance)} />
+              <StatCard label="Loan ceiling" value={fmt((Number(data.savings.balance) + Number(data.shares.balance)) * LOAN_MULTIPLIER)} accent={THEME.gold} />
+            </div>
+
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Loan history</div>
+              {data.loans.length === 0 ? <EmptyState text="No previous loans." /> : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {data.loans.map(l => (
+                    <div key={l.id} style={{ border: `1px solid ${THEME.line}`, borderRadius: 10, padding: 10, fontSize: 12 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <b>{fmt(l.principal)}</b>
+                        <Badge color={statusColor(l.status)}>{l.status}</Badge>
+                      </div>
+                      <div style={{ color: THEME.inkSoft, marginTop: 3 }}>
+                        {fmtDate(l.applied_at)} · {l.term_months} months{l.purpose ? ` · ${l.purpose}` : ''}
+                      </div>
+                      {l.status === 'active' && <div style={{ color: THEME.inkSoft, marginTop: 2 }}>Outstanding: <b style={{ color: THEME.ink }}>{fmt(l.outstanding_balance)}</b></div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Transaction history</div>
+              {data.txns.length === 0 ? <EmptyState text="No transactions yet." /> : data.txns.map(t => <TxnRow key={t.id} t={t} />)}
+            </div>
+
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Dividends received</div>
+              {data.divAlloc.length === 0 ? <EmptyState text="No dividends yet." /> : data.divAlloc.map(d => (
+                <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: `1px solid ${THEME.line}`, fontSize: 12 }}>
+                  <span>{fmtDate(d.created_at)}</span><b>{fmt(d.amount)}</b>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------ member app ------------------------------ */
 
 function MemberApp({ profile, token, onLogout }) {
@@ -350,16 +513,20 @@ function MemberApp({ profile, token, onLogout }) {
   const [divMap, setDivMap] = useState({});
   const [showLoanForm, setShowLoanForm] = useState(false);
   const [showStatement, setShowStatement] = useState(false);
+  const [statementRequests, setStatementRequests] = useState([]);
+  const [viewCertifiedRequest, setViewCertifiedRequest] = useState(null);
+  const [myPhotoUrl, setMyPhotoUrl] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [sa, sh, ln, tx, da, dv] = await Promise.all([
+    const [sa, sh, ln, tx, da, dv, sr] = await Promise.all([
       sb(`/rest/v1/savings_accounts?member_id=eq.${profile.id}&select=*`, { token }),
       sb(`/rest/v1/shares?member_id=eq.${profile.id}&select=*`, { token }),
       sb(`/rest/v1/loans?member_id=eq.${profile.id}&select=*&order=applied_at.desc`, { token }),
       sb(`/rest/v1/transactions?member_id=eq.${profile.id}&select=*&order=created_at.desc&limit=30`, { token }),
       sb(`/rest/v1/dividend_allocations?member_id=eq.${profile.id}&select=*`, { token }),
       sb(`/rest/v1/dividends?select=*`, { token }),
+      sb(`/rest/v1/statement_requests?member_id=eq.${profile.id}&select=*&order=requested_at.desc&limit=5`, { token }),
     ]);
     setSavings(sa[0] || { balance: 0 });
     setShares(sh[0] || { balance: 0 });
@@ -368,10 +535,17 @@ function MemberApp({ profile, token, onLogout }) {
     setDivAlloc(da || []);
     const m = {}; (dv || []).forEach(d => { m[d.id] = d.year; });
     setDivMap(m);
+    setStatementRequests(sr || []);
     setLoading(false);
   }, [profile.id, token]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (profile.photo_url) getSignedPhotoUrl(token, profile.photo_url).then(setMyPhotoUrl); }, [profile.photo_url, token]);
+
+  async function requestStatement() {
+    await sb('/rest/v1/statement_requests', { method: 'POST', token, headers: { Prefer: 'return=minimal' }, body: { member_id: profile.id } });
+    await load();
+  }
 
   const activeLoan = loans.find(l => l.status === 'active');
 
@@ -469,6 +643,32 @@ function MemberApp({ profile, token, onLogout }) {
                   {txns.length === 0 ? <EmptyState text="No transactions yet." /> : txns.map(t => <TxnRow key={t.id} t={t} />)}
                 </Card>
                 <Card>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>Certified statement</div>
+                    {!statementRequests.some(r => r.status === 'pending') && (
+                      <GhostButton onClick={requestStatement}>Request one</GhostButton>
+                    )}
+                  </div>
+                  <p style={{ fontSize: 12, color: THEME.inkSoft, margin: '0 0 10px' }}>
+                    Need an officially approved statement (e.g. for a bank or employer)? Request one and a manager will sign off on it.
+                  </p>
+                  {statementRequests.length === 0 ? <EmptyState text="No statement requests yet." /> : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {statementRequests.map(r => (
+                        <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: `1px solid ${THEME.line}`, fontSize: 12 }}>
+                          <span>Requested {fmtDate(r.requested_at)}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <Badge color={statusColor(r.status === 'approved' ? 'active' : r.status)}>{r.status}</Badge>
+                            {r.status === 'approved' && (
+                              <GhostButton onClick={() => setViewCertifiedRequest(r)} style={{ padding: '5px 10px', fontSize: 11 }}>View</GhostButton>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+                <Card>
                   <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
                     <Gift size={15} color={THEME.gold} /> Dividends
                   </div>
@@ -486,6 +686,9 @@ function MemberApp({ profile, token, onLogout }) {
       </div>
       {showStatement && (
         <StatementModal profile={profile} savings={savings} shares={shares} txns={txns} onClose={() => setShowStatement(false)} />
+      )}
+      {viewCertifiedRequest && (
+        <StatementModal profile={profile} savings={savings} shares={shares} txns={txns} certifiedRequest={viewCertifiedRequest} onClose={() => setViewCertifiedRequest(null)} />
       )}
 
       <BottomNav tabs={tabs} active={tab} onChange={setTab} />
@@ -583,6 +786,8 @@ function getPerms(role) {
 
 function AdminApp({ profile, token, onLogout }) {
   const perms = getPerms(profile.role);
+  const [viewMemberId, setViewMemberId] = useState(null);
+  const [myPhotoUrl, setMyPhotoUrl] = useState(null);
   const [tab, setTab] = useState('overview');
   const [loading, setLoading] = useState(true);
   const [profiles, setProfiles] = useState([]);
@@ -591,23 +796,35 @@ function AdminApp({ profile, token, onLogout }) {
   const [loansAll, setLoansAll] = useState([]);
   const [txnsAll, setTxnsAll] = useState([]);
   const [dividendsAll, setDividendsAll] = useState([]);
+  const [statementRequestsAll, setStatementRequestsAll] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [pf, sa, sh, ln, tx, dv] = await Promise.all([
+    const [pf, sa, sh, ln, tx, dv, sr] = await Promise.all([
       sb('/rest/v1/profiles?select=*&order=created_at.desc', { token }),
       sb('/rest/v1/savings_accounts?select=*', { token }),
       sb('/rest/v1/shares?select=*', { token }),
       sb('/rest/v1/loans?select=*&order=applied_at.desc', { token }),
       sb('/rest/v1/transactions?select=*&order=created_at.desc&limit=60', { token }),
       sb('/rest/v1/dividends?select=*&order=year.desc', { token }),
+      sb('/rest/v1/statement_requests?status=eq.pending&select=*&order=requested_at.asc', { token }),
     ]);
     setProfiles(pf || []); setSavingsAll(sa || []); setSharesAll(sh || []);
     setLoansAll(ln || []); setTxnsAll(tx || []); setDividendsAll(dv || []);
+    setStatementRequestsAll(sr || []);
     setLoading(false);
   }, [token]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (profile.photo_url) getSignedPhotoUrl(token, profile.photo_url).then(setMyPhotoUrl); }, [profile.photo_url, token]);
+
+  async function decideStatementRequest(req, status) {
+    await sb(`/rest/v1/statement_requests?id=eq.${req.id}`, {
+      method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
+      body: { status, decided_at: new Date().toISOString(), decided_by: profile.id },
+    });
+    await load();
+  }
 
   const profileMap = useMemo(() => { const m = {}; profiles.forEach(p => { m[p.id] = p; }); return m; }, [profiles]);
   const savingsMap = useMemo(() => { const m = {}; savingsAll.forEach(s => { m[s.member_id] = s; }); return m; }, [savingsAll]);
@@ -736,6 +953,7 @@ function AdminApp({ profile, token, onLogout }) {
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100vh', background: THEME.paper, display: 'flex', flexDirection: 'column' }}>
       <Header title="Amani SACCO" subtitle={`${ROLE_LABELS[profile.role] || profile.role} · ${profile.full_name}`} onLogout={onLogout}
+        avatarUrl={myPhotoUrl} avatarName={profile.full_name}
         roleBadge={<Badge color={profile.role === 'manager' ? THEME.gold : THEME.pine}>{ROLE_LABELS[profile.role] || profile.role}</Badge>} />
 
       <div style={{ flex: 1, padding: '0 20px 20px', overflowY: 'auto' }}>
@@ -769,6 +987,27 @@ function AdminApp({ profile, token, onLogout }) {
 
             {tab === 'members' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                {perms.approveAccounts && statementRequestsAll.length > 0 && (
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: THEME.pine }}>
+                      Statement requests ({statementRequestsAll.length})
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {statementRequestsAll.map(r => (
+                        <Card key={r.id}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <div style={{ fontWeight: 700, fontSize: 14 }}>{(profileMap[r.member_id] || {}).full_name || 'Member'}</div>
+                            <span style={{ fontSize: 12, color: THEME.inkSoft }}>{fmtDate(r.requested_at)}</span>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                            <PrimaryButton style={{ flex: 1 }} onClick={() => decideStatementRequest(r, 'approved')}><Check size={14} /> Approve</PrimaryButton>
+                            <GhostButton style={{ flex: 1, borderColor: THEME.danger, color: THEME.danger }} onClick={() => decideStatementRequest(r, 'rejected')}><X size={14} style={{ marginRight: 4 }} />Reject</GhostButton>
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {pendingMembers.length > 0 && (
                   <div>
                     <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: THEME.gold }}>
@@ -855,6 +1094,9 @@ function AdminApp({ profile, token, onLogout }) {
                           </div>
                           <div style={{ fontFamily: 'Fraunces, serif', fontSize: 18, marginTop: 4 }}>{fmt(l.principal)}</div>
                           <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 2 }}>{l.term_months} months{l.purpose ? ` · ${l.purpose}` : ''}</div>
+                          <GhostButton style={{ marginTop: 10, width: '100%' }} onClick={() => setViewMemberId(l.member_id)}>
+                            View applicant's full profile
+                          </GhostButton>
                           {perms.manageLoans ? (
                             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                               <PrimaryButton style={{ flex: 1 }} onClick={() => approveLoan(l)}><Check size={14} /> Approve</PrimaryButton>
@@ -872,7 +1114,7 @@ function AdminApp({ profile, token, onLogout }) {
                   <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Active loans</div>
                   {activeLoans.length === 0 ? <EmptyState text="No active loans." /> : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      {activeLoans.map(l => <ActiveLoanRow key={l.id} loan={l} memberName={(profileMap[l.member_id] || {}).full_name} onRepay={recordRepayment} readOnly={!perms.manageLoans} />)}
+                      {activeLoans.map(l => <ActiveLoanRow key={l.id} loan={l} memberName={(profileMap[l.member_id] || {}).full_name} onRepay={recordRepayment} onViewProfile={() => setViewMemberId(l.member_id)} readOnly={!perms.manageLoans} />)}
                     </div>
                   )}
                 </div>
@@ -920,12 +1162,14 @@ function AdminApp({ profile, token, onLogout }) {
         )}
       </div>
 
+      {viewMemberId && <MemberDetailModal memberId={viewMemberId} token={token} onClose={() => setViewMemberId(null)} />}
+
       <BottomNav tabs={tabs} active={tab} onChange={setTab} />
     </div>
   );
 }
 
-function ActiveLoanRow({ loan, memberName, onRepay, readOnly = false }) {
+function ActiveLoanRow({ loan, memberName, onRepay, onViewProfile, readOnly = false }) {
   const [amount, setAmount] = useState('');
   const [busy, setBusy] = useState(false);
   return (
@@ -934,6 +1178,11 @@ function ActiveLoanRow({ loan, memberName, onRepay, readOnly = false }) {
         <div style={{ fontWeight: 700 }}>{memberName || 'Member'}</div>
         <span style={{ fontSize: 12, color: THEME.inkSoft }}>Outstanding {fmt(loan.outstanding_balance)}</span>
       </div>
+      {onViewProfile && (
+        <button onClick={onViewProfile} style={{ background: 'none', border: 'none', padding: 0, marginTop: 4, color: THEME.pine, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+          View full profile
+        </button>
+      )}
       {!readOnly && (
         <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
           <input type="number" min="1" placeholder="Repayment amount" value={amount} onChange={e => setAmount(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
@@ -1037,6 +1286,87 @@ function AwaitingApprovalScreen({ profile, onLogout }) {
   );
 }
 
+function KycCompletionScreen({ profile, token, onDone, onLogout }) {
+  const [nin, setNin] = useState(profile.nin || '');
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  function handleFile(f) {
+    if (!f) return;
+    setFile(f);
+    setPreview(URL.createObjectURL(f));
+  }
+
+  async function submit() {
+    if (!nin.trim() || !file) { setError('Please provide your NIN and a photo before continuing.'); return; }
+    setError(''); setBusy(true);
+    try {
+      const path = await uploadKycPhoto(token, profile.id, file);
+      await sb(`/rest/v1/profiles?id=eq.${profile.id}`, {
+        method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
+        body: { nin: nin.trim(), photo_url: path },
+      });
+      onDone({ ...profile, nin: nin.trim(), photo_url: path });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div style={{ width: '100%', maxWidth: 380 }}>
+        <div style={{ textAlign: 'center', marginBottom: 22 }}>
+          <div style={{
+            width: 52, height: 52, borderRadius: 14, background: `linear-gradient(135deg, ${THEME.gold}, ${THEME.pine})`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px',
+          }}>
+            <ShieldCheck size={26} color="#fff" />
+          </div>
+          <h1 style={{ fontFamily: 'Fraunces, serif', fontSize: 22, color: THEME.ink, margin: 0 }}>Verify your identity</h1>
+          <p style={{ color: THEME.inkSoft, fontSize: 13, marginTop: 6 }}>
+            One last step, {profile.full_name.split(' ')[0]} — this is required before your account can be reviewed.
+          </p>
+        </div>
+        <Card style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+            {preview ? (
+              <img src={preview} alt="Preview" style={{ width: 96, height: 96, borderRadius: '50%', objectFit: 'cover', border: `3px solid ${THEME.paper}`, boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }} />
+            ) : (
+              <div style={{ width: 96, height: 96, borderRadius: '50%', background: THEME.paper, display: 'flex', alignItems: 'center', justifyContent: 'center', color: THEME.inkSoft, fontSize: 11, textAlign: 'center', padding: 8 }}>
+                No photo yet
+              </div>
+            )}
+            <label style={{ cursor: 'pointer' }}>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: THEME.pine,
+                border: `1px solid ${THEME.pine}`, borderRadius: 10, padding: '8px 14px',
+              }}>
+                <Camera size={14} /> {preview ? 'Retake / choose again' : 'Take or upload a passport photo'}
+              </span>
+              <input type="file" accept="image/*" capture="user" style={{ display: 'none' }} onChange={e => handleFile(e.target.files[0])} />
+            </label>
+            <p style={{ fontSize: 11, color: THEME.inkSoft, textAlign: 'center', margin: 0 }}>
+              On a phone this opens your camera directly. On a computer it opens your file picker.
+            </p>
+          </div>
+          <Field label="National ID Number (NIN)">
+            <input value={nin} onChange={e => setNin(e.target.value)} placeholder="e.g. CM12345678ABCD" style={inputStyle} />
+          </Field>
+          {error && <div style={{ color: THEME.danger, fontSize: 13 }}>{error}</div>}
+          <PrimaryButton disabled={busy} onClick={submit} style={{ padding: '12px 0', fontSize: 15 }}>
+            {busy ? <Loader2 size={16} className="spin" /> : 'Continue'}
+          </PrimaryButton>
+          <GhostButton onClick={onLogout} style={{ alignSelf: 'center', border: 'none', color: THEME.inkSoft }}>Sign out instead</GhostButton>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 /* --------------------------------- app --------------------------------- */
 
 export default function App() {
@@ -1057,6 +1387,12 @@ export default function App() {
       `}</style>
       {!session || !profile ? (
         <AuthScreen onAuthed={(sess, prof) => { setSession(sess); setProfile(prof); }} />
+      ) : (!profile.nin || !profile.photo_url) ? (
+        <KycCompletionScreen
+          profile={profile} token={session.access_token}
+          onDone={updated => setProfile(updated)}
+          onLogout={() => { setSession(null); setProfile(null); }}
+        />
       ) : profile.status !== 'active' ? (
         <AwaitingApprovalScreen profile={profile} onLogout={() => { setSession(null); setProfile(null); }} />
       ) : profile.role !== 'member' ? (

@@ -327,7 +327,7 @@ function AuthScreen({ onAuthed }) {
           </form>
         </Card>
         <p style={{ textAlign: 'center', color: THEME.inkSoft, fontSize: 12, marginTop: 16 }}>
-          Demo session — reloading the page signs you out. Deploy this outside the artifact sandbox for a persistent login.
+          Git Group Home of Technology · CEO Frank Ssemakula
         </p>
       </div>
     </div>

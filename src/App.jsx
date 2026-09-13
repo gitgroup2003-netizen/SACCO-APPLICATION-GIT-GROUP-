@@ -5,7 +5,7 @@ import {
   ArrowDownRight, Loader2, ShieldCheck, PieChart as PieIcon, Gift, FileText, Printer, Camera, Sun, Moon, Eye, EyeOff,
   PiggyBank, TrendingUp, Coins, Receipt
 } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://tupofpitveaifaemassc.supabase.co';
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable__jw3Hv0tG2wDnjvJ_8o8Qg_3RwRzn9F';
@@ -649,6 +649,63 @@ function MemberDetailModal({ memberId, token, onClose }) {
   );
 }
 
+const TIERS = [
+  { name: 'Bronze', min: 0 },
+  { name: 'Silver', min: 100000 },
+  { name: 'Gold', min: 500000 },
+  { name: 'Platinum', min: 2000000 },
+];
+function getTierProgress(total) {
+  let idx = 0;
+  for (let i = 0; i < TIERS.length; i++) if (total >= TIERS[i].min) idx = i;
+  const current = TIERS[idx];
+  const next = TIERS[idx + 1];
+  if (!next) return { current, next: null, pct: 100 };
+  const pct = Math.min(100, Math.round(((total - current.min) / (next.min - current.min)) * 100));
+  return { current, next, pct };
+}
+function TierProgressCard({ total }) {
+  const { current, next, pct } = getTierProgress(total);
+  return (
+    <Card>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{
+            width: 26, height: 26, borderRadius: '50%', background: `linear-gradient(135deg, ${THEME.gold}, ${THEME.pine})`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <Coins size={13} color="#fff" />
+          </div>
+          <span style={{ fontWeight: 700, fontSize: 13 }}>{current.name} member</span>
+        </div>
+        {next && <span style={{ fontSize: 11, color: THEME.inkSoft }}>{pct}% to {next.name}</span>}
+      </div>
+      {next ? (
+        <>
+          <div style={{ height: 8, borderRadius: 4, background: THEME.line, marginTop: 10, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${pct}%`, borderRadius: 4, background: `linear-gradient(90deg, ${THEME.gold}, ${THEME.pine})` }} />
+          </div>
+          <div style={{ fontSize: 11, color: THEME.inkSoft, marginTop: 6 }}>{fmt(next.min - total)} more in savings + shares to reach {next.name}</div>
+        </>
+      ) : (
+        <div style={{ fontSize: 11, color: THEME.inkSoft, marginTop: 8 }}>You've reached the highest tier — well done.</div>
+      )}
+    </Card>
+  );
+}
+function getMemberInsight({ total, tierInfo, activeLoan, pendingLoan }) {
+  if (pendingLoan) {
+    return { text: `Your loan application for ${fmt(pendingLoan.principal)} is awaiting review.`, action: null };
+  }
+  if (activeLoan) {
+    return { text: `You have ${fmt(activeLoan.outstanding_balance)} outstanding on your loan. Keep repayments up to stay in good standing.`, action: null };
+  }
+  if (tierInfo.next) {
+    return { text: `You're ${fmt(tierInfo.next.min - total)} away from ${tierInfo.next.name} tier. Keep saving!`, action: null };
+  }
+  return { text: `You're all caught up, and at our top membership tier. Great work growing your savings.`, action: null };
+}
+
 function BalanceHeroCard({ savings, shares }) {
   const [hidden, setHidden] = useState(false);
   const total = Number(savings.balance) + Number(shares.balance);
@@ -675,6 +732,67 @@ function BalanceHeroCard({ savings, shares }) {
           <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.65)' }}>Shares</div>
           <div style={{ fontSize: 14, fontWeight: 700 }}>{hidden ? '••••' : fmt(shares.balance)}</div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function DonutChart({ data, colors, size = 130 }) {
+  const total = data.reduce((s, d) => s + d.value, 0);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+      <div style={{ width: size, height: size, position: 'relative', flexShrink: 0 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie data={data} dataKey="value" nameKey="name" innerRadius="68%" outerRadius="100%" paddingAngle={2} stroke="none">
+              {data.map((d, i) => <Cell key={d.name} fill={colors[i % colors.length]} />)}
+            </Pie>
+          </PieChart>
+        </ResponsiveContainer>
+        <div style={{
+          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexDirection: 'column', pointerEvents: 'none',
+        }}>
+          <div style={{ fontFamily: 'Fraunces, serif', fontSize: 17, color: THEME.ink }}>
+            {total > 0 ? Math.round((data[0]?.value || 0) / total * 100) : 0}%
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+        {data.map((d, i) => (
+          <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: colors[i % colors.length], flexShrink: 0 }} />
+            <span style={{ color: THEME.inkSoft, flexShrink: 0 }}>{d.name}</span>
+            <span style={{ fontWeight: 700, color: THEME.ink }}>{total > 0 ? Math.round(d.value / total * 100) : 0}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SaccoCard({ totalAssets }) {
+  return (
+    <div style={{
+      background: `linear-gradient(135deg, ${THEME.pineDark}, ${THEME.pine})`, borderRadius: 20, padding: 22,
+      color: '#fff', position: 'relative', overflow: 'hidden',
+      boxShadow: THEME.mode === 'dark' ? '0 8px 24px rgba(0,0,0,0.4)' : '0 8px 24px rgba(15,61,58,0.22)',
+    }}>
+      <div style={{
+        position: 'absolute', right: -30, top: -30, width: 140, height: 140, borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(255,255,255,0.08), transparent 70%)',
+      }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, letterSpacing: 0.5 }}>AMANI SACCO</div>
+        <Badge color={THEME.gold}>Active</Badge>
+      </div>
+      <div style={{ marginTop: 22 }}>
+        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.65)' }}>Total institution assets</div>
+        <div style={{ fontFamily: 'Fraunces, serif', fontSize: 26, marginTop: 4 }}>{fmt(totalAssets)}</div>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 20 }}>
+        <div style={{ fontSize: 12, letterSpacing: 2, color: 'rgba(255,255,255,0.7)' }}>•••• •••• •••• SACCO</div>
+        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.65)' }}>as of {fmtDate(new Date())}</div>
       </div>
     </div>
   );
@@ -728,6 +846,7 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   }
 
   const activeLoan = loans.find(l => l.status === 'active');
+  const pendingLoan = loans.find(l => l.status === 'pending');
 
   async function applyForLoan(principal, term_months, purpose, overCeiling) {
     await sb('/rest/v1/loans', {
@@ -769,6 +888,20 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                   { label: 'Statement', icon: FileText, onClick: () => setShowStatement(true) },
                   { label: 'Activity', icon: Receipt, onClick: () => setTab('activity') },
                 ]} />
+                <TierProgressCard total={Number(savings.balance) + Number(shares.balance)} />
+                {(() => {
+                  const tierInfo = getTierProgress(Number(savings.balance) + Number(shares.balance));
+                  const insight = getMemberInsight({ total: Number(savings.balance) + Number(shares.balance), tierInfo, activeLoan, pendingLoan });
+                  return (
+                    <Card style={{ border: `1px solid ${THEME.pine}33`, background: THEME.mode === 'dark' ? THEME.pine + '14' : THEME.pine + '08' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <TrendingUp size={16} color={THEME.pine} />
+                        <span style={{ fontWeight: 700, fontSize: 13, color: THEME.pine }}>Insight</span>
+                      </div>
+                      <p style={{ fontSize: 13, color: THEME.ink, margin: 0, lineHeight: 1.5 }}>{insight.text}</p>
+                    </Card>
+                  );
+                })()}
                 <div style={{ display: 'flex', gap: 10 }}>
                   <StatCard label="Savings" value={fmt(savings.balance)} accent={THEME.pine} icon={PiggyBank} />
                   <StatCard label="Shares" value={fmt(shares.balance)} accent={THEME.gold} icon={Coins} />
@@ -781,6 +914,17 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                     </div>
                     <div style={{ fontFamily: 'Fraunces, serif', fontSize: 20, color: THEME.ink }}>{fmt(activeLoan.outstanding_balance)}</div>
                     <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 2 }}>outstanding of {fmt(activeLoan.principal)} principal</div>
+                  </Card>
+                )}
+                {txns.length > 0 && (
+                  <Card>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>Transaction breakdown</div>
+                    <DonutChart
+                      data={Object.entries(txns.reduce((acc, t) => { acc[t.type] = (acc[t.type] || 0) + Number(t.amount); return acc; }, {}))
+                        .map(([name, value]) => ({ name: name.replace('_', ' '), value }))
+                        .sort((a, b) => b.value - a.value)}
+                      colors={[THEME.pine, THEME.gold, THEME.danger, THEME.success]}
+                    />
                   </Card>
                 )}
                 <Card>
@@ -979,6 +1123,7 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const perms = getPerms(profile.role);
   const [viewMemberId, setViewMemberId] = useState(null);
   const [myPhotoUrl, setMyPhotoUrl] = useState(null);
+  const [statsPeriod, setStatsPeriod] = useState('month');
   const [tab, setTab] = useState('overview');
   const [loading, setLoading] = useState(true);
   const [profiles, setProfiles] = useState([]);
@@ -1033,6 +1178,40 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
     { name: 'Shares', value: Math.round(totalShares) },
     { name: 'Loans out', value: Math.round(totalOutstanding) },
   ];
+
+  const now = new Date();
+  const periodTxns = txnsAll.filter(t => {
+    const d = new Date(t.created_at);
+    if (statsPeriod === 'year') return d.getFullYear() === now.getFullYear();
+    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  });
+  const sumType = (types) => periodTxns.filter(t => types.includes(t.type)).reduce((s, t) => s + Number(t.amount), 0);
+  const cashFlowData = [
+    { name: 'Deposits', value: Math.round(sumType(['deposit', 'share_purchase'])) },
+    { name: 'Withdrawals', value: Math.round(sumType(['withdrawal'])) },
+    { name: 'Disbursed', value: Math.round(sumType(['loan_disbursement'])) },
+  ].filter(d => d.value > 0);
+
+  const trendData = useMemo(() => {
+    const buckets = {};
+    const labels = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      buckets[key] = 0;
+      labels.push({ key, label: d.toLocaleDateString('en-GB', { month: 'short' }) });
+    }
+    txnsAll.forEach(t => {
+      if (!['deposit', 'share_purchase'].includes(t.type)) return;
+      const d = new Date(t.created_at);
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      if (key in buckets) buckets[key] += Number(t.amount);
+    });
+    return labels.map(l => ({ name: l.label, value: Math.round(buckets[l.key]) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txnsAll]);
+
+  const DONUT_COLORS = [THEME.pine, THEME.gold, THEME.danger, THEME.success];
 
   async function approveLoan(loan) {
     await sb(`/rest/v1/loans?id=eq.${loan.id}`, {
@@ -1152,6 +1331,52 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
           <>
             {tab === 'overview' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <SaccoCard totalAssets={totalSavings + totalShares} />
+
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {['month', 'year'].map(p => (
+                    <button key={p} onClick={() => setStatsPeriod(p)} style={{
+                      flex: 1, padding: '9px 0', borderRadius: 10, border: `1px solid ${THEME.line}`, cursor: 'pointer',
+                      background: statsPeriod === p ? THEME.pine : THEME.surface,
+                      color: statsPeriod === p ? '#fff' : THEME.inkSoft, fontWeight: 600, fontSize: 13,
+                    }}>{p === 'month' ? 'This month' : 'This year'}</button>
+                  ))}
+                </div>
+
+                <Card>
+                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>Fund composition</div>
+                  {chartData.every(d => d.value === 0) ? <EmptyState text="No funds recorded yet." /> : (
+                    <DonutChart data={chartData} colors={DONUT_COLORS} />
+                  )}
+                </Card>
+
+                <Card>
+                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>
+                    Cash flow · {statsPeriod === 'month' ? 'this month' : 'this year'}
+                  </div>
+                  {cashFlowData.length === 0 ? <EmptyState text="No transactions in this period yet." /> : (
+                    <DonutChart data={cashFlowData} colors={DONUT_COLORS} />
+                  )}
+                </Card>
+
+                <Card>
+                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Deposit trend · last 6 months</div>
+                  <ResponsiveContainer width="100%" height={160}>
+                    <AreaChart data={trendData}>
+                      <defs>
+                        <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={THEME.pine} stopOpacity={0.35} />
+                          <stop offset="100%" stopColor={THEME.pine} stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <XAxis dataKey="name" tick={{ fontSize: 11, fill: THEME.inkSoft }} axisLine={{ stroke: THEME.line }} tickLine={false} />
+                      <YAxis hide />
+                      <Tooltip formatter={(v) => fmt(v)} contentStyle={{ borderRadius: 8, border: `1px solid ${THEME.line}`, fontSize: 12, background: THEME.surface, color: THEME.ink }} itemStyle={{ color: THEME.ink }} labelStyle={{ color: THEME.ink }} />
+                      <Area type="monotone" dataKey="value" stroke={THEME.pine} strokeWidth={2.5} fill="url(#trendFill)" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </Card>
+
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                   <StatCard label="Members" value={profiles.length} icon={Users} />
                   <StatCard label="Pending approvals" value={pendingMembers.length} accent={pendingMembers.length ? THEME.gold : THEME.ink} icon={ShieldCheck} />
@@ -1161,18 +1386,6 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                   <StatCard label="Total savings" value={fmt(totalSavings)} accent={THEME.pine} icon={PiggyBank} />
                   <StatCard label="Loans outstanding" value={fmt(totalOutstanding)} accent={THEME.danger} icon={TrendingUp} />
                 </div>
-                <Card>
-                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Institution snapshot</div>
-                  <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={chartData}>
-                      <CartesianGrid stroke={THEME.line} vertical={false} />
-                      <XAxis dataKey="name" tick={{ fontSize: 12, fill: THEME.inkSoft }} axisLine={{ stroke: THEME.line }} tickLine={false} />
-                      <YAxis tick={{ fontSize: 11, fill: THEME.inkSoft }} axisLine={false} tickLine={false} width={40} />
-                      <Tooltip formatter={(v) => fmt(v)} contentStyle={{ borderRadius: 8, border: `1px solid ${THEME.line}`, fontSize: 12, background: THEME.surface, color: THEME.ink }} itemStyle={{ color: THEME.ink }} labelStyle={{ color: THEME.ink }} />
-                      <Bar dataKey="value" fill={THEME.pine} radius={[6, 6, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </Card>
               </div>
             )}
 

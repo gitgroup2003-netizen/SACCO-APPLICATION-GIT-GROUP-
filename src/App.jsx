@@ -2,9 +2,10 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { jsPDF } from 'jspdf';
 import {
   Home, Landmark, Wallet, Users, LogOut, Plus, Check, X, ArrowUpRight,
-  ArrowDownRight, Loader2, ShieldCheck, PieChart as PieIcon, Gift, FileText, Printer, Camera, Sun, Moon, Eye, EyeOff
+  ArrowDownRight, Loader2, ShieldCheck, PieChart as PieIcon, Gift, FileText, Printer, Camera, Sun, Moon, Eye, EyeOff,
+  PiggyBank, TrendingUp, Coins, Receipt
 } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://tupofpitveaifaemassc.supabase.co';
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable__jw3Hv0tG2wDnjvJ_8o8Qg_3RwRzn9F';
@@ -201,12 +202,42 @@ function Avatar({ name, photoUrl, size = 40 }) {
     }}>{initials}</div>
   );
 }
-function StatCard({ label, value, accent }) {
+function StatCard({ label, value, accent, icon: Icon }) {
+  const color = accent || THEME.pine;
   return (
-    <Card style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ fontSize: 12, color: THEME.inkSoft, fontWeight: 600 }}>{label}</div>
-      <div style={{ fontFamily: 'Fraunces, serif', fontSize: 22, color: accent || THEME.ink, marginTop: 6, whiteSpace: 'nowrap' }}>{value}</div>
+    <Card style={{ flex: 1, minWidth: 0, padding: 14 }}>
+      {Icon && (
+        <div style={{
+          width: 30, height: 30, borderRadius: 9, background: color + '18',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 8,
+        }}>
+          <Icon size={15} color={color} />
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: THEME.inkSoft, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
+      <div style={{ fontFamily: 'Fraunces, serif', fontSize: 18, color: THEME.ink, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
     </Card>
+  );
+}
+function QuickActions({ actions }) {
+  return (
+    <div style={{ display: 'flex', gap: 10 }}>
+      {actions.map(a => (
+        <button key={a.label} onClick={a.onClick} style={{
+          flex: 1, background: THEME.surface, border: `1px solid ${THEME.line}`, borderRadius: 16,
+          padding: '14px 8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+          cursor: 'pointer', boxShadow: '0 1px 3px rgba(15,61,58,0.06)',
+        }}>
+          <div style={{
+            width: 38, height: 38, borderRadius: '50%', background: `linear-gradient(135deg, ${THEME.pine}, ${THEME.pineDark})`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <a.icon size={17} color="#fff" />
+          </div>
+          <span style={{ fontSize: 11, fontWeight: 600, color: THEME.ink, textAlign: 'center' }}>{a.label}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 function EmptyState({ text }) {
@@ -573,9 +604,9 @@ function MemberDetailModal({ memberId, token, onClose }) {
             </div>
 
             <div style={{ display: 'flex', gap: 10 }}>
-              <StatCard label="Savings" value={fmt(data.savings.balance)} />
-              <StatCard label="Shares" value={fmt(data.shares.balance)} />
-              <StatCard label="Loan ceiling" value={fmt((Number(data.savings.balance) + Number(data.shares.balance)) * LOAN_MULTIPLIER)} accent={THEME.gold} />
+              <StatCard label="Savings" value={fmt(data.savings.balance)} icon={PiggyBank} />
+              <StatCard label="Shares" value={fmt(data.shares.balance)} icon={Coins} />
+              <StatCard label="Loan ceiling" value={fmt((Number(data.savings.balance) + Number(data.shares.balance)) * LOAN_MULTIPLIER)} accent={THEME.gold} icon={Landmark} />
             </div>
 
             <div>
@@ -728,10 +759,19 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
           <>
             {tab === 'overview' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div>
+                  <div style={{ fontFamily: 'Fraunces, serif', fontSize: 20, color: THEME.ink }}>Hi, {profile.full_name.split(' ')[0]}</div>
+                  <div style={{ fontSize: 13, color: THEME.inkSoft, marginTop: 2 }}>Here's where your savings stand today</div>
+                </div>
                 <BalanceHeroCard savings={savings} shares={shares} />
+                <QuickActions actions={[
+                  { label: 'Apply loan', icon: Landmark, onClick: () => setTab('loans') },
+                  { label: 'Statement', icon: FileText, onClick: () => setShowStatement(true) },
+                  { label: 'Activity', icon: Receipt, onClick: () => setTab('activity') },
+                ]} />
                 <div style={{ display: 'flex', gap: 10 }}>
-                  <StatCard label="Savings" value={fmt(savings.balance)} accent={THEME.pine} />
-                  <StatCard label="Shares" value={fmt(shares.balance)} accent={THEME.gold} />
+                  <StatCard label="Savings" value={fmt(savings.balance)} accent={THEME.pine} icon={PiggyBank} />
+                  <StatCard label="Shares" value={fmt(shares.balance)} accent={THEME.gold} icon={Coins} />
                 </div>
                 {activeLoan && (
                   <Card>
@@ -1113,13 +1153,13 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
             {tab === 'overview' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                  <StatCard label="Members" value={profiles.length} />
-                  <StatCard label="Pending approvals" value={pendingMembers.length} accent={pendingMembers.length ? THEME.gold : THEME.ink} />
-                  <StatCard label="Pending loans" value={pendingLoans.length} accent={THEME.gold} />
+                  <StatCard label="Members" value={profiles.length} icon={Users} />
+                  <StatCard label="Pending approvals" value={pendingMembers.length} accent={pendingMembers.length ? THEME.gold : THEME.ink} icon={ShieldCheck} />
+                  <StatCard label="Pending loans" value={pendingLoans.length} accent={THEME.gold} icon={Landmark} />
                 </div>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                  <StatCard label="Total savings" value={fmt(totalSavings)} accent={THEME.pine} />
-                  <StatCard label="Loans outstanding" value={fmt(totalOutstanding)} accent={THEME.danger} />
+                  <StatCard label="Total savings" value={fmt(totalSavings)} accent={THEME.pine} icon={PiggyBank} />
+                  <StatCard label="Loans outstanding" value={fmt(totalOutstanding)} accent={THEME.danger} icon={TrendingUp} />
                 </div>
                 <Card>
                   <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Institution snapshot</div>

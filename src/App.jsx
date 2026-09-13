@@ -600,6 +600,11 @@ function MemberDetailModal({ memberId, token, onClose }) {
                 <div style={{ fontWeight: 700, fontSize: 15 }}>{data.profile?.full_name}</div>
                 <div style={{ fontSize: 12, color: THEME.inkSoft }}>{data.profile?.phone || 'No phone on file'}</div>
                 <div style={{ fontSize: 12, color: THEME.inkSoft }}>NIN: {data.profile?.nin || 'Not on file'}</div>
+                <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 4 }}>
+                  Next of kin: {data.profile?.next_of_kin_name
+                    ? `${data.profile.next_of_kin_name} (${data.profile.next_of_kin_relationship || 'relationship not stated'}) · ${data.profile.next_of_kin_phone || 'no phone'}`
+                    : 'Not on file'}
+                </div>
               </div>
             </div>
 
@@ -798,6 +803,60 @@ function SaccoCard({ totalAssets }) {
   );
 }
 
+function ProfileTab({ profile, token, photoUrl }) {
+  const [nokName, setNokName] = useState(profile.next_of_kin_name || '');
+  const [nokPhone, setNokPhone] = useState(profile.next_of_kin_phone || '');
+  const [nokRel, setNokRel] = useState(profile.next_of_kin_relationship || '');
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    setBusy(true); setSaved(false);
+    try {
+      await sb(`/rest/v1/profiles?id=eq.${profile.id}`, {
+        method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
+        body: { next_of_kin_name: nokName.trim(), next_of_kin_phone: nokPhone.trim(), next_of_kin_relationship: nokRel.trim() },
+      });
+      setSaved(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <Card style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <Avatar name={profile.full_name} photoUrl={photoUrl} size={56} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>{profile.full_name}</div>
+          <div style={{ fontSize: 12, color: THEME.inkSoft }}>{profile.phone || 'No phone on file'}</div>
+          <div style={{ fontSize: 12, color: THEME.inkSoft }}>NIN: {profile.nin || 'Not on file'}</div>
+        </div>
+      </Card>
+      <Card>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Next of kin</div>
+        <p style={{ fontSize: 12, color: THEME.inkSoft, margin: '0 0 12px' }}>
+          Kept on file for the SACCO's records — used only if you're ever unreachable.
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <Field label="Full name">
+            <input value={nokName} onChange={e => setNokName(e.target.value)} style={inputStyle} placeholder="e.g. Jane Doe" />
+          </Field>
+          <Field label="Relationship">
+            <input value={nokRel} onChange={e => setNokRel(e.target.value)} style={inputStyle} placeholder="e.g. Spouse, Parent, Sibling" />
+          </Field>
+          <Field label="Phone number">
+            <input value={nokPhone} onChange={e => setNokPhone(e.target.value)} style={inputStyle} placeholder="e.g. 07XX XXX XXX" />
+          </Field>
+          <PrimaryButton disabled={busy} onClick={save}>
+            {busy ? <Loader2 size={15} className="spin" /> : saved ? <><Check size={14} /> Saved</> : 'Save'}
+          </PrimaryButton>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 /* ------------------------------ member app ------------------------------ */
 
 function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
@@ -865,6 +924,7 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
     { key: 'overview', label: 'Home', icon: Home },
     { key: 'loans', label: 'Loans', icon: Landmark },
     { key: 'activity', label: 'Activity', icon: Wallet },
+    { key: 'profile', label: 'Profile', icon: Users },
   ];
 
   return (
@@ -1016,6 +1076,10 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                 </Card>
               </div>
             )}
+
+            {tab === 'profile' && (
+              <ProfileTab profile={profile} token={token} photoUrl={myPhotoUrl} />
+            )}
           </>
         )}
       </div>
@@ -1124,6 +1188,18 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const [viewMemberId, setViewMemberId] = useState(null);
   const [myPhotoUrl, setMyPhotoUrl] = useState(null);
   const [statsPeriod, setStatsPeriod] = useState('month');
+  const [memberPhotoUrls, setMemberPhotoUrls] = useState({});
+
+  useEffect(() => {
+    if (tab !== 'members') return;
+    const withPhotos = profiles.filter(p => p.photo_url && !(p.id in memberPhotoUrls));
+    if (withPhotos.length === 0) return;
+    (async () => {
+      const entries = await Promise.all(withPhotos.map(async p => [p.id, await getSignedPhotoUrl(token, p.photo_url)]));
+      setMemberPhotoUrls(prev => { const next = { ...prev }; entries.forEach(([id, url]) => { next[id] = url; }); return next; });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, profiles]);
   const [tab, setTab] = useState('overview');
   const [loading, setLoading] = useState(true);
   const [profiles, setProfiles] = useState([]);
@@ -1420,8 +1496,13 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                       {pendingMembers.map(m => (
                         <Card key={m.id} style={{ borderColor: THEME.gold }}>
-                          <div style={{ fontWeight: 700, fontSize: 14 }}>{m.full_name}</div>
-                          <div style={{ fontSize: 12, color: THEME.inkSoft }}>{m.phone || 'No phone on file'}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <Avatar name={m.full_name} photoUrl={memberPhotoUrls[m.id]} size={38} />
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, fontSize: 14 }}>{m.full_name}</div>
+                              <div style={{ fontSize: 12, color: THEME.inkSoft }}>{m.phone || 'No phone on file'}</div>
+                            </div>
+                          </div>
                           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                             {perms.approveAccounts ? (
                               <PrimaryButton style={{ flex: 1 }} onClick={() => approveMember(m)}>
@@ -1444,10 +1525,16 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {profiles.filter(p => p.status !== 'pending').length === 0 ? <EmptyState text="No approved members yet." /> : profiles.filter(p => p.status !== 'pending').map(m => (
                       <Card key={m.id}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                          <div>
-                            <div style={{ fontWeight: 700, fontSize: 14 }}>{m.full_name}</div>
-                            <div style={{ fontSize: 12, color: THEME.inkSoft }}>{m.phone || 'No phone on file'}</div>
+                        <div
+                          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', cursor: 'pointer' }}
+                          onClick={() => setViewMemberId(m.id)}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                            <Avatar name={m.full_name} photoUrl={memberPhotoUrls[m.id]} size={38} />
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.full_name}</div>
+                              <div style={{ fontSize: 12, color: THEME.inkSoft }}>{m.phone || 'No phone on file'}</div>
+                            </div>
                           </div>
                           <Badge color={statusColor(m.status)}>{m.status}</Badge>
                         </div>

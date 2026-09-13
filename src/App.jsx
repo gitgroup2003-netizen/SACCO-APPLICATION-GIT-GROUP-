@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { jsPDF } from 'jspdf';
 import {
   Home, Landmark, Wallet, Users, LogOut, Plus, Check, X, ArrowUpRight,
-  ArrowDownRight, Loader2, ShieldCheck, PieChart as PieIcon, Gift, FileText, Printer, Camera
+  ArrowDownRight, Loader2, ShieldCheck, PieChart as PieIcon, Gift, FileText, Printer, Camera, Sun, Moon, Eye, EyeOff
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://tupofpitveaifaemassc.supabase.co';
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable__jw3Hv0tG2wDnjvJ_8o8Qg_3RwRzn9F';
 
-const THEME = {
+const LIGHT_PALETTE = {
+  mode: 'light',
   pine: '#0F3D3A',
   pineDark: '#0A2B29',
   gold: '#C08A2E',
@@ -21,6 +23,28 @@ const THEME = {
   success: '#2F7A4D',
   danger: '#B4453D',
 };
+const DARK_PALETTE = {
+  mode: 'dark',
+  pine: '#2FD9AE',
+  pineDark: '#0C1E1B',
+  gold: '#F0C572',
+  goldLight: '#F6D89A',
+  paper: '#0A0F0E',
+  surface: '#151E1C',
+  ink: '#F2F3F0',
+  inkSoft: '#8FA098',
+  line: '#263230',
+  success: '#34D399',
+  danger: '#F87171',
+};
+
+// THEME is a single mutable object every component reads at render time.
+// Toggling switches its contents in place; the app tree is then keyed by
+// mode so React fully re-renders with the new values.
+const THEME = { ...LIGHT_PALETTE };
+function applyThemeMode(mode) {
+  Object.assign(THEME, mode === 'dark' ? DARK_PALETTE : LIGHT_PALETTE);
+}
 
 const LOAN_MULTIPLIER = 3; // ceiling = (savings + shares) x multiplier, per SACCO credit policy
 
@@ -195,7 +219,7 @@ function Spinner() {
     </div>
   );
 }
-function Header({ title, subtitle, onLogout, roleBadge, avatarUrl, avatarName }) {
+function Header({ title, subtitle, onLogout, roleBadge, avatarUrl, avatarName, themeMode, onToggleTheme }) {
   return (
     <div style={{
       padding: '22px 20px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -216,9 +240,16 @@ function Header({ title, subtitle, onLogout, roleBadge, avatarUrl, avatarName })
           {roleBadge && <div style={{ marginTop: 6 }}>{roleBadge}</div>}
         </div>
       </div>
-      <button onClick={onLogout} title="Sign out" style={{
-        background: 'rgba(255,255,255,0.14)', border: 'none', borderRadius: 10, padding: 9, cursor: 'pointer', flexShrink: 0,
-      }}><LogOut size={16} color="#fff" /></button>
+      <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+        {onToggleTheme && (
+          <button onClick={onToggleTheme} title="Toggle theme" style={{
+            background: 'rgba(255,255,255,0.14)', border: 'none', borderRadius: 10, padding: 9, cursor: 'pointer',
+          }}>{themeMode === 'dark' ? <Sun size={16} color="#fff" /> : <Moon size={16} color="#fff" />}</button>
+        )}
+        <button onClick={onLogout} title="Sign out" style={{
+          background: 'rgba(255,255,255,0.14)', border: 'none', borderRadius: 10, padding: 9, cursor: 'pointer',
+        }}><LogOut size={16} color="#fff" /></button>
+      </div>
     </div>
   );
 }
@@ -245,7 +276,7 @@ function BottomNav({ tabs, active, onChange }) {
 
 /* ------------------------------ auth screen ------------------------------ */
 
-function AuthScreen({ onAuthed }) {
+function AuthScreen({ onAuthed, themeMode, onToggleTheme }) {
   const [mode, setMode] = useState('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -286,7 +317,13 @@ function AuthScreen({ onAuthed }) {
   }
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, position: 'relative' }}>
+      {onToggleTheme && (
+        <button onClick={onToggleTheme} title="Toggle theme" style={{
+          position: 'absolute', top: 20, right: 20, background: THEME.surface, border: `1px solid ${THEME.line}`,
+          borderRadius: 10, padding: 9, cursor: 'pointer',
+        }}>{themeMode === 'dark' ? <Sun size={16} color={THEME.ink} /> : <Moon size={16} color={THEME.ink} />}</button>
+      )}
       <div style={{ width: '100%', maxWidth: 380 }}>
         <div style={{ textAlign: 'center', marginBottom: 26 }}>
           <div style={{ width: 52, height: 52, borderRadius: 14, background: THEME.pine, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}>
@@ -334,6 +371,84 @@ function AuthScreen({ onAuthed }) {
   );
 }
 
+function downloadStatementPdf({ profile, savings, shares, txns, certifiedRequest }) {
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const marginX = 44;
+  let y = 56;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(16);
+  doc.setTextColor(15, 61, 58);
+  doc.text('Amani SACCO', marginX, y);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(110, 110, 110);
+  y += 16;
+  doc.text(`${certifiedRequest ? 'Certified statement' : 'Mini statement'} · generated ${fmtDateTime(new Date())}`, marginX, y);
+
+  y += 26;
+  if (certifiedRequest) {
+    doc.setFillColor(232, 245, 238);
+    doc.rect(marginX, y - 12, 507, 26, 'F');
+    doc.setTextColor(30, 120, 90);
+    doc.setFontSize(10);
+    doc.text(`Approved and certified ${fmtDateTime(certifiedRequest.decided_at)} · Ref ${shortId(certifiedRequest.id)}`, marginX + 8, y + 4);
+    y += 30;
+  }
+
+  doc.setDrawColor(230, 230, 230);
+  doc.setFillColor(250, 248, 242);
+  doc.rect(marginX, y, 507, 64, 'F');
+  doc.setTextColor(20, 20, 20);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text(profile.full_name, marginX + 10, y + 18);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(90, 90, 90);
+  doc.text(profile.phone || 'No phone on file', marginX + 10, y + 32);
+  doc.setTextColor(20, 20, 20);
+  doc.text(`Savings balance: ${fmt(savings.balance)}`, marginX + 10, y + 48);
+  doc.text(`Shares balance: ${fmt(shares.balance)}`, marginX + 260, y + 48);
+  y += 84;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(20, 20, 20);
+  doc.text(`Last ${txns.length} transactions`, marginX, y);
+  y += 14;
+
+  doc.setFontSize(8.5);
+  const colX = { date: marginX, type: marginX + 100, mode: marginX + 200, amount: marginX + 320, balance: marginX + 400, id: marginX + 470 };
+  doc.setFont('helvetica', 'bold');
+  doc.text('Date/time', colX.date, y);
+  doc.text('Type', colX.type, y);
+  doc.text('Mode', colX.mode, y);
+  doc.text('Amount', colX.amount, y);
+  doc.text('Balance', colX.balance, y);
+  y += 4;
+  doc.setDrawColor(200, 200, 200);
+  doc.line(marginX, y, marginX + 507, y);
+  y += 12;
+  doc.setFont('helvetica', 'normal');
+
+  txns.forEach(t => {
+    if (y > 780) { doc.addPage(); y = 56; }
+    const isCredit = ['deposit', 'loan_disbursement', 'dividend', 'share_purchase'].includes(t.type);
+    doc.setTextColor(60, 60, 60);
+    doc.text(fmtDateTime(t.created_at), colX.date, y, { maxWidth: 96 });
+    doc.text(t.type.replace('_', ' '), colX.type, y, { maxWidth: 96 });
+    doc.text((t.payment_mode || 'cash').replace('_', ' '), colX.mode, y, { maxWidth: 116 });
+    doc.setTextColor(isCredit ? 30 : 180, isCredit ? 140 : 40, isCredit ? 90 : 40);
+    doc.text(`${isCredit ? '+' : '-'}${fmt(t.amount)}`, colX.amount, y, { maxWidth: 76 });
+    doc.setTextColor(60, 60, 60);
+    doc.text(fmt(t.balance_after), colX.balance, y, { maxWidth: 76 });
+    y += 16;
+  });
+
+  doc.save(`Amani-SACCO-Statement-${profile.full_name.replace(/\s+/g, '-')}-${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
 function StatementModal({ profile, savings, shares, txns, certifiedRequest, onClose }) {
   return (
     <div style={{
@@ -344,12 +459,15 @@ function StatementModal({ profile, savings, shares, txns, certifiedRequest, onCl
         background: THEME.surface, width: '100%', maxWidth: 480, maxHeight: '88vh', overflowY: 'auto',
         borderRadius: '18px 18px 0 0', padding: 20,
       }} className="statement-sheet">
-        <div className="statement-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+        <div className="statement-actions" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>{certifiedRequest ? 'Certified statement' : 'Mini statement'}</div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <GhostButton onClick={() => window.print()}><Printer size={14} /> Print / Save PDF</GhostButton>
-            <GhostButton onClick={onClose}><X size={14} /></GhostButton>
-          </div>
+          <GhostButton onClick={onClose} style={{ padding: '6px 10px' }}><X size={14} /></GhostButton>
+        </div>
+        <div className="statement-actions" style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+          <PrimaryButton style={{ flex: 1 }} onClick={() => downloadStatementPdf({ profile, savings, shares, txns, certifiedRequest })}>
+            <FileText size={14} /> Download PDF
+          </PrimaryButton>
+          <GhostButton onClick={() => window.print()}><Printer size={14} /></GhostButton>
         </div>
         <div id="statement-print-area">
           <div style={{ textAlign: 'center', marginBottom: 14 }}>
@@ -500,9 +618,40 @@ function MemberDetailModal({ memberId, token, onClose }) {
   );
 }
 
+function BalanceHeroCard({ savings, shares }) {
+  const [hidden, setHidden] = useState(false);
+  const total = Number(savings.balance) + Number(shares.balance);
+  return (
+    <div style={{
+      background: `linear-gradient(135deg, ${THEME.pine}, ${THEME.pineDark})`, borderRadius: 20, padding: 22,
+      color: '#fff', boxShadow: THEME.mode === 'dark' ? '0 8px 24px rgba(0,0,0,0.4)' : '0 8px 24px rgba(15,61,58,0.22)',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)', fontWeight: 600, letterSpacing: 0.4 }}>TOTAL BALANCE</span>
+        <button onClick={() => setHidden(h => !h)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}>
+          {hidden ? <EyeOff size={16} color="rgba(255,255,255,0.75)" /> : <Eye size={16} color="rgba(255,255,255,0.75)" />}
+        </button>
+      </div>
+      <div style={{ fontFamily: 'Fraunces, serif', fontSize: 32, marginTop: 6, letterSpacing: -0.5 }}>
+        {hidden ? '••••••••' : fmt(total)}
+      </div>
+      <div style={{ display: 'flex', gap: 18, marginTop: 16 }}>
+        <div>
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.65)' }}>Savings</div>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>{hidden ? '••••' : fmt(savings.balance)}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.65)' }}>Shares</div>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>{hidden ? '••••' : fmt(shares.balance)}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------ member app ------------------------------ */
 
-function MemberApp({ profile, token, onLogout }) {
+function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const [tab, setTab] = useState('overview');
   const [loading, setLoading] = useState(true);
   const [savings, setSavings] = useState({ balance: 0 });
@@ -571,6 +720,7 @@ function MemberApp({ profile, token, onLogout }) {
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100vh', background: THEME.paper, display: 'flex', flexDirection: 'column' }}>
       <Header title={profile.full_name} subtitle="Member" onLogout={onLogout}
+        avatarUrl={myPhotoUrl} avatarName={profile.full_name} themeMode={themeMode} onToggleTheme={onToggleTheme}
         roleBadge={<Badge color={THEME.pine}>member</Badge>} />
 
       <div style={{ flex: 1, padding: '0 20px 20px', overflowY: 'auto' }}>
@@ -578,9 +728,10 @@ function MemberApp({ profile, token, onLogout }) {
           <>
             {tab === 'overview' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <BalanceHeroCard savings={savings} shares={shares} />
                 <div style={{ display: 'flex', gap: 10 }}>
-                  <StatCard label="Savings balance" value={fmt(savings.balance)} accent={THEME.pine} />
-                  <StatCard label="Share balance" value={fmt(shares.balance)} accent={THEME.gold} />
+                  <StatCard label="Savings" value={fmt(savings.balance)} accent={THEME.pine} />
+                  <StatCard label="Shares" value={fmt(shares.balance)} accent={THEME.gold} />
                 </div>
                 {activeLoan && (
                   <Card>
@@ -784,7 +935,7 @@ function getPerms(role) {
   };
 }
 
-function AdminApp({ profile, token, onLogout }) {
+function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const perms = getPerms(profile.role);
   const [viewMemberId, setViewMemberId] = useState(null);
   const [myPhotoUrl, setMyPhotoUrl] = useState(null);
@@ -953,7 +1104,7 @@ function AdminApp({ profile, token, onLogout }) {
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100vh', background: THEME.paper, display: 'flex', flexDirection: 'column' }}>
       <Header title="Amani SACCO" subtitle={`${ROLE_LABELS[profile.role] || profile.role} · ${profile.full_name}`} onLogout={onLogout}
-        avatarUrl={myPhotoUrl} avatarName={profile.full_name}
+        avatarUrl={myPhotoUrl} avatarName={profile.full_name} themeMode={themeMode} onToggleTheme={onToggleTheme}
         roleBadge={<Badge color={profile.role === 'manager' ? THEME.gold : THEME.pine}>{ROLE_LABELS[profile.role] || profile.role}</Badge>} />
 
       <div style={{ flex: 1, padding: '0 20px 20px', overflowY: 'auto' }}>
@@ -977,7 +1128,7 @@ function AdminApp({ profile, token, onLogout }) {
                       <CartesianGrid stroke={THEME.line} vertical={false} />
                       <XAxis dataKey="name" tick={{ fontSize: 12, fill: THEME.inkSoft }} axisLine={{ stroke: THEME.line }} tickLine={false} />
                       <YAxis tick={{ fontSize: 11, fill: THEME.inkSoft }} axisLine={false} tickLine={false} width={40} />
-                      <Tooltip formatter={(v) => fmt(v)} contentStyle={{ borderRadius: 8, border: `1px solid ${THEME.line}`, fontSize: 12 }} />
+                      <Tooltip formatter={(v) => fmt(v)} contentStyle={{ borderRadius: 8, border: `1px solid ${THEME.line}`, fontSize: 12, background: THEME.surface, color: THEME.ink }} itemStyle={{ color: THEME.ink }} labelStyle={{ color: THEME.ink }} />
                       <Bar dataKey="value" fill={THEME.pine} radius={[6, 6, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
@@ -1446,12 +1597,62 @@ function KycCompletionScreen({ profile, token, onDone, onLogout }) {
 
 /* --------------------------------- app --------------------------------- */
 
+const SESSION_KEY = 'amani_sacco_session';
+
 export default function App() {
-  const [session, setSession] = useState(null);
-  const [profile, setProfile] = useState(null);
+  const [session, setSession] = useState(() => {
+    try { const raw = sessionStorage.getItem(SESSION_KEY); return raw ? JSON.parse(raw).session : null; } catch { return null; }
+  });
+  const [profile, setProfile] = useState(() => {
+    try { const raw = sessionStorage.getItem(SESSION_KEY); return raw ? JSON.parse(raw).profile : null; } catch { return null; }
+  });
+  const [checkingSession, setCheckingSession] = useState(!!session);
+  const [themeMode, setThemeMode] = useState(() => {
+    try { return localStorage.getItem('amani_theme') || 'light'; } catch { return 'light'; }
+  });
+
+  applyThemeMode(themeMode); // mutate the shared THEME object before this render paints
+
+  function toggleTheme() {
+    const next = themeMode === 'dark' ? 'light' : 'dark';
+    setThemeMode(next);
+    try { localStorage.setItem('amani_theme', next); } catch { /* ignore */ }
+  }
+
+  // Persist whenever session/profile change; clear on logout.
+  useEffect(() => {
+    try {
+      if (session && profile) sessionStorage.setItem(SESSION_KEY, JSON.stringify({ session, profile }));
+      else sessionStorage.removeItem(SESSION_KEY);
+    } catch { /* storage unavailable — session just won't persist across refresh */ }
+  }, [session, profile]);
+
+  // On first load with a cached session, re-fetch the profile so any
+  // status/role change made elsewhere (e.g. approval, role change)
+  // is picked up rather than trusting a possibly-stale cached copy.
+  useEffect(() => {
+    if (!session) { setCheckingSession(false); return; }
+    (async () => {
+      try {
+        const fresh = await sb(`/rest/v1/profiles?id=eq.${session.user.id}&select=*`, { token: session.access_token });
+        if (fresh && fresh[0]) setProfile(fresh[0]);
+        else { setSession(null); setProfile(null); }
+      } catch {
+        // token likely expired/invalid — fall back to signing out
+        setSession(null); setProfile(null);
+      } finally {
+        setCheckingSession(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (checkingSession) {
+    return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spinner /></div>;
+  }
 
   return (
-    <div style={{ minHeight: '100vh', background: THEME.paper, fontFamily: 'Inter, sans-serif', color: THEME.ink }}>
+    <div key={themeMode} style={{ minHeight: '100vh', background: THEME.paper, fontFamily: 'Inter, sans-serif', color: THEME.ink, transition: 'background 0.2s' }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap');
         * { box-sizing: border-box; min-width: 0; }
@@ -1463,7 +1664,7 @@ export default function App() {
         input:focus, select:focus { border-color: ${THEME.pine} !important; }
       `}</style>
       {!session || !profile ? (
-        <AuthScreen onAuthed={(sess, prof) => { setSession(sess); setProfile(prof); }} />
+        <AuthScreen onAuthed={(sess, prof) => { setSession(sess); setProfile(prof); }} themeMode={themeMode} onToggleTheme={toggleTheme} />
       ) : (!profile.nin || !profile.photo_url) ? (
         <KycCompletionScreen
           profile={profile} token={session.access_token}
@@ -1473,9 +1674,9 @@ export default function App() {
       ) : profile.status !== 'active' ? (
         <AwaitingApprovalScreen profile={profile} onLogout={() => { setSession(null); setProfile(null); }} />
       ) : profile.role !== 'member' ? (
-        <AdminApp profile={profile} token={session.access_token} onLogout={() => { setSession(null); setProfile(null); }} />
+        <AdminApp profile={profile} token={session.access_token} onLogout={() => { setSession(null); setProfile(null); }} themeMode={themeMode} onToggleTheme={toggleTheme} />
       ) : (
-        <MemberApp profile={profile} token={session.access_token} onLogout={() => { setSession(null); setProfile(null); }} />
+        <MemberApp profile={profile} token={session.access_token} onLogout={() => { setSession(null); setProfile(null); }} themeMode={themeMode} onToggleTheme={toggleTheme} />
       )}
     </div>
   );

@@ -1189,17 +1189,6 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const [myPhotoUrl, setMyPhotoUrl] = useState(null);
   const [statsPeriod, setStatsPeriod] = useState('month');
   const [memberPhotoUrls, setMemberPhotoUrls] = useState({});
-
-  useEffect(() => {
-    if (tab !== 'members') return;
-    const withPhotos = profiles.filter(p => p.photo_url && !(p.id in memberPhotoUrls));
-    if (withPhotos.length === 0) return;
-    (async () => {
-      const entries = await Promise.all(withPhotos.map(async p => [p.id, await getSignedPhotoUrl(token, p.photo_url)]));
-      setMemberPhotoUrls(prev => { const next = { ...prev }; entries.forEach(([id, url]) => { next[id] = url; }); return next; });
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, profiles]);
   const [tab, setTab] = useState('overview');
   const [loading, setLoading] = useState(true);
   const [profiles, setProfiles] = useState([]);
@@ -1229,6 +1218,16 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (profile.photo_url) getSignedPhotoUrl(token, profile.photo_url).then(setMyPhotoUrl); }, [profile.photo_url, token]);
+  useEffect(() => {
+    if (tab !== 'members') return;
+    const withPhotos = profiles.filter(p => p.photo_url && !(p.id in memberPhotoUrls));
+    if (withPhotos.length === 0) return;
+    (async () => {
+      const entries = await Promise.all(withPhotos.map(async p => [p.id, await getSignedPhotoUrl(token, p.photo_url)]));
+      setMemberPhotoUrls(prev => { const next = { ...prev }; entries.forEach(([id, url]) => { next[id] = url; }); return next; });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, profiles]);
 
   async function decideStatementRequest(req, status) {
     await sb(`/rest/v1/statement_requests?id=eq.${req.id}`, {

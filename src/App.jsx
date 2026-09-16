@@ -3,7 +3,7 @@ import { jsPDF } from 'jspdf';
 import {
   Home, Landmark, Wallet, Users, LogOut, Plus, Check, X, ArrowUpRight,
   ArrowDownRight, Loader2, ShieldCheck, PieChart as PieIcon, Gift, FileText, Printer, Camera, Sun, Moon, Eye, EyeOff,
-  PiggyBank, TrendingUp, Coins, Receipt
+  PiggyBank, TrendingUp, Coins, Receipt, CreditCard, Sparkles
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
 
@@ -803,6 +803,59 @@ function SaccoCard({ totalAssets }) {
   );
 }
 
+function AutoDebitCard({ memberName }) {
+  return (
+    <Card style={{ padding: 0, overflow: 'hidden' }}>
+      <div style={{
+        background: 'linear-gradient(135deg, #3B5BDB, #1E3A8A)', borderRadius: '16px 16px 0 0',
+        padding: 20, color: '#fff', position: 'relative', overflow: 'hidden',
+      }}>
+        <div style={{
+          position: 'absolute', right: -20, top: -20, width: 120, height: 120, borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(255,255,255,0.12), transparent 70%)',
+        }} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)', fontWeight: 600 }}>AUTO-SAVE CARD</div>
+            <div style={{ fontSize: 13, marginTop: 2 }}>{memberName}</div>
+          </div>
+          <span style={{
+            background: THEME.gold, color: '#3B2A00', fontSize: 10, fontWeight: 700,
+            padding: '4px 9px', borderRadius: 999, display: 'flex', alignItems: 'center', gap: 4,
+          }}><Sparkles size={11} /> COMING SOON</span>
+        </div>
+        <div style={{ marginTop: 22, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <CreditCard size={22} color="rgba(255,255,255,0.85)" />
+          <div style={{ fontSize: 17, letterSpacing: 3, fontFamily: 'monospace' }}>•••• •••• •••• ••••</div>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 20 }}>
+          <div>
+            <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)' }}>VALID THRU</div>
+            <div style={{ fontSize: 12 }}>MM / YY</div>
+          </div>
+          <div style={{ display: 'flex' }}>
+            <div style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(255,255,255,0.85)' }} />
+            <div style={{ width: 22, height: 22, borderRadius: '50%', background: THEME.gold, marginLeft: -10 }} />
+          </div>
+        </div>
+      </div>
+      <div style={{ padding: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Automatic monthly savings</div>
+        <p style={{ fontSize: 12, color: THEME.inkSoft, margin: '0 0 12px', lineHeight: 1.5 }}>
+          Soon you'll be able to link a card and have a fixed amount moved into your savings automatically every month —
+          no need to visit the SACCO or remember to deposit.
+        </p>
+        <button disabled style={{
+          width: '100%', padding: '11px 0', borderRadius: 10, border: `1px solid ${THEME.line}`,
+          background: THEME.paper, color: THEME.inkSoft, fontWeight: 600, fontSize: 13, cursor: 'not-allowed',
+        }}>
+          Add a card — coming soon
+        </button>
+      </div>
+    </Card>
+  );
+}
+
 function ProfileTab({ profile, token, photoUrl }) {
   const [nokName, setNokName] = useState(profile.next_of_kin_name || '');
   const [nokPhone, setNokPhone] = useState(profile.next_of_kin_phone || '');
@@ -833,6 +886,7 @@ function ProfileTab({ profile, token, photoUrl }) {
           <div style={{ fontSize: 12, color: THEME.inkSoft }}>NIN: {profile.nin || 'Not on file'}</div>
         </div>
       </Card>
+      <AutoDebitCard memberName={profile.full_name} />
       <Card>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Next of kin</div>
         <p style={{ fontSize: 12, color: THEME.inkSoft, margin: '0 0 12px' }}>

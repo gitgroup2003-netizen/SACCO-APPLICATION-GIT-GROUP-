@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import * as XLSX from 'xlsx';
 import {
   Home, Landmark, Wallet, Users, LogOut, Plus, Check, X, ArrowUpRight,
   ArrowDownRight, Loader2, ShieldCheck, PieChart as PieIcon, Gift, FileText, Printer, Camera, Sun, Moon, Eye, EyeOff,
@@ -409,6 +411,84 @@ function AuthScreen({ onAuthed, themeMode, onToggleTheme }) {
       </div>
     </div>
   );
+}
+
+function buildAuditRows(profiles, savingsMap, sharesMap) {
+  return profiles.map(m => ({
+    'Full name': m.full_name,
+    'Phone': m.phone || '',
+    'NIN': m.nin || '',
+    'Role': ROLE_LABELS[m.role] || m.role,
+    'Status': m.status,
+    'Savings balance': Number((savingsMap[m.id] || {}).balance || 0),
+    'Shares balance': Number((sharesMap[m.id] || {}).balance || 0),
+    'Next of kin': m.next_of_kin_name || '',
+    'Next of kin phone': m.next_of_kin_phone || '',
+    'Next of kin relationship': m.next_of_kin_relationship || '',
+    'Joined': m.created_at ? fmtDate(m.created_at) : '',
+  }));
+}
+
+function exportMembersExcel(profiles, savingsMap, sharesMap) {
+  const rows = buildAuditRows(profiles, savingsMap, sharesMap);
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = Object.keys(rows[0] || {}).map(k => ({ wch: Math.max(k.length, 14) }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Members');
+  XLSX.writeFile(wb, `Amani-SACCO-Members-${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
+function exportMembersPdf(profiles, savingsMap, sharesMap) {
+  const rows = buildAuditRows(profiles, savingsMap, sharesMap);
+  const doc = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'landscape' });
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(15);
+  doc.setTextColor(15, 61, 58);
+  doc.text('Amani SACCO — Member Register', 40, 40);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(110, 110, 110);
+  doc.text(`Generated ${fmtDateTime(new Date())} · ${rows.length} members`, 40, 56);
+
+  const columns = Object.keys(rows[0] || {});
+  autoTable(doc, {
+    startY: 72,
+    head: [columns],
+    body: rows.map(r => columns.map(c => (typeof r[c] === 'number' ? fmt(r[c]) : r[c]))),
+    styles: { fontSize: 8, cellPadding: 5 },
+    headStyles: { fillColor: [15, 61, 58], textColor: 255 },
+    alternateRowStyles: { fillColor: [250, 248, 242] },
+    margin: { left: 40, right: 40 },
+  });
+
+  doc.save(`Amani-SACCO-Members-${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
+function exportMembersWord(profiles, savingsMap, sharesMap) {
+  const rows = buildAuditRows(profiles, savingsMap, sharesMap);
+  const columns = Object.keys(rows[0] || {});
+  const tableRows = rows.map(r => `<tr>${columns.map(c => `<td style="border:1px solid #ccc;padding:4px 8px;font-size:11px;">${r[c] ?? ''}</td>`).join('')}</tr>`).join('');
+  const html = `
+    <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">
+    <head><meta charset="utf-8"><title>Amani SACCO Members</title></head>
+    <body style="font-family:Calibri,Arial,sans-serif;">
+      <h2 style="color:#0F3D3A;">Amani SACCO — Member Register</h2>
+      <p style="color:#666;font-size:12px;">Generated ${fmtDateTime(new Date())} · ${rows.length} members</p>
+      <table style="border-collapse:collapse;width:100%;">
+        <thead><tr>${columns.map(c => `<th style="border:1px solid #ccc;padding:4px 8px;background:#0F3D3A;color:#fff;font-size:11px;text-align:left;">${c}</th>`).join('')}</tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </body>
+    </html>`;
+  const blob = new Blob(['\ufeff', html], { type: 'application/msword' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Amani-SACCO-Members-${new Date().toISOString().slice(0, 10)}.doc`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function downloadStatementPdf({ profile, savings, shares, txns, certifiedRequest }) {
@@ -1160,6 +1240,7 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
 
 function TxnRow({ t, expandable = true }) {
   const [open, setOpen] = useState(false);
+  const isAdjustment = t.type === 'balance_adjustment' || t.type === 'shares_adjustment';
   const isCredit = ['deposit', 'loan_disbursement', 'dividend', 'share_purchase'].includes(t.type);
   return (
     <div style={{ borderBottom: `1px solid ${THEME.line}` }}>
@@ -1169,18 +1250,20 @@ function TxnRow({ t, expandable = true }) {
       >
         <div style={{
           width: 30, height: 30, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          background: (isCredit ? THEME.success : THEME.danger) + '1a',
+          background: (isAdjustment ? THEME.gold : isCredit ? THEME.success : THEME.danger) + '1a',
         }}>
-          {isCredit ? <ArrowDownRight size={15} color={THEME.success} /> : <ArrowUpRight size={15} color={THEME.danger} />}
+          {isAdjustment ? <FileText size={14} color={THEME.gold} /> : isCredit ? <ArrowDownRight size={15} color={THEME.success} /> : <ArrowUpRight size={15} color={THEME.danger} />}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, textTransform: 'capitalize' }}>{t.type.replace('_', ' ')}</div>
+          <div style={{ fontSize: 13, fontWeight: 600, textTransform: 'capitalize' }}>
+            {isAdjustment ? `Opening ${t.type === 'shares_adjustment' ? 'shares' : 'savings'} balance` : t.type.replace('_', ' ')}
+          </div>
           <div style={{ fontSize: 11, color: THEME.inkSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {fmtDateTime(t.created_at)}{t.notes ? ` · ${t.notes}` : ''}
           </div>
         </div>
-        <div style={{ fontWeight: 700, fontSize: 13, color: isCredit ? THEME.success : THEME.danger, whiteSpace: 'nowrap' }}>
-          {isCredit ? '+' : '−'}{fmt(t.amount)}
+        <div style={{ fontWeight: 700, fontSize: 13, color: isAdjustment ? THEME.gold : isCredit ? THEME.success : THEME.danger, whiteSpace: 'nowrap' }}>
+          {isAdjustment ? '' : isCredit ? '+' : '−'}{fmt(t.amount)}
         </div>
       </div>
       {open && (
@@ -1579,7 +1662,35 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
     });
     await load();
   }
-  async function recordTxn(memberId, type, amount, paymentMode, notes) {
+  async function recordTxn(memberId, type, amount, paymentMode, notes, date) {
+    const createdAt = date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString();
+
+    if (type === 'shares_adjustment') {
+      const newBal = Number(amount);
+      await sb(`/rest/v1/shares?member_id=eq.${memberId}`, {
+        method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
+        body: { balance: newBal, updated_at: new Date().toISOString() },
+      });
+      await sb('/rest/v1/transactions', {
+        method: 'POST', token, headers: { Prefer: 'return=minimal' },
+        body: { member_id: memberId, type, amount: newBal, balance_after: newBal, payment_mode: 'other', notes: notes || 'Opening shares balance', created_by: profile.id, created_at: createdAt },
+      });
+      await load();
+      return;
+    }
+    if (type === 'balance_adjustment') {
+      const newBal = Number(amount);
+      await sb(`/rest/v1/savings_accounts?member_id=eq.${memberId}`, {
+        method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
+        body: { balance: newBal, updated_at: new Date().toISOString() },
+      });
+      await sb('/rest/v1/transactions', {
+        method: 'POST', token, headers: { Prefer: 'return=minimal' },
+        body: { member_id: memberId, type, amount: newBal, balance_after: newBal, payment_mode: 'other', notes: notes || 'Opening savings balance', created_by: profile.id, created_at: createdAt },
+      });
+      await load();
+      return;
+    }
     if (type === 'share_purchase') {
       const acct = sharesMap[memberId] || { balance: 0 };
       const newBal = Number(acct.balance) + Number(amount);
@@ -1589,20 +1700,21 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
       });
       await sb('/rest/v1/transactions', {
         method: 'POST', token, headers: { Prefer: 'return=minimal' },
-        body: { member_id: memberId, type, amount: Number(amount), balance_after: newBal, payment_mode: paymentMode, notes, created_by: profile.id },
+        body: { member_id: memberId, type, amount: Number(amount), balance_after: newBal, payment_mode: paymentMode, notes, created_by: profile.id, created_at: createdAt },
       });
       await load();
       return;
     }
+    // deposit, withdrawal, dividend — all credit/debit the savings balance
     const acct = savingsMap[memberId] || { balance: 0 };
-    const newBal = type === 'deposit' ? Number(acct.balance) + Number(amount) : Number(acct.balance) - Number(amount);
+    const newBal = type === 'withdrawal' ? Number(acct.balance) - Number(amount) : Number(acct.balance) + Number(amount);
     await sb(`/rest/v1/savings_accounts?member_id=eq.${memberId}`, {
       method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
       body: { balance: newBal, updated_at: new Date().toISOString() },
     });
     await sb('/rest/v1/transactions', {
       method: 'POST', token, headers: { Prefer: 'return=minimal' },
-      body: { member_id: memberId, type, amount: Number(amount), balance_after: newBal, payment_mode: paymentMode, notes, created_by: profile.id },
+      body: { member_id: memberId, type, amount: Number(amount), balance_after: newBal, payment_mode: paymentMode, notes, created_by: profile.id, created_at: createdAt },
     });
     await load();
   }
@@ -1645,7 +1757,7 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
     { key: 'overview', label: 'Overview', icon: PieIcon },
     { key: 'members', label: 'Members', icon: Users },
     ...(perms.viewLoans ? [{ key: 'loans', label: 'Loans', icon: Landmark }] : []),
-    ...(perms.viewCash ? [{ key: 'transactions', label: 'Cash', icon: Wallet }] : []),
+    ...(perms.viewCash ? [{ key: 'transactions', label: 'Finances', icon: Wallet }] : []),
     ...(perms.viewDividends ? [{ key: 'dividends', label: 'Dividends', icon: Gift }] : []),
   ];
   useEffect(() => {
@@ -1717,6 +1829,25 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
 
             {tab === 'members' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                {(profile.role === 'manager' || profile.role === 'supervisor') && (
+                  <Card>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Export for audit</div>
+                    <p style={{ fontSize: 11.5, color: THEME.inkSoft, margin: '0 0 10px' }}>
+                      Downloads every member's profile, KYC, next of kin, and current balances.
+                    </p>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <GhostButton onClick={() => exportMembersExcel(profiles, savingsMap, sharesMap)}>
+                        <FileText size={14} /> Excel
+                      </GhostButton>
+                      <GhostButton onClick={() => exportMembersPdf(profiles, savingsMap, sharesMap)}>
+                        <FileText size={14} /> PDF
+                      </GhostButton>
+                      <GhostButton onClick={() => exportMembersWord(profiles, savingsMap, sharesMap)}>
+                        <FileText size={14} /> Word
+                      </GhostButton>
+                    </div>
+                  </Card>
+                )}
                 {perms.approveAccounts && statementRequestsAll.length > 0 && (
                   <div>
                     <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: THEME.pine }}>
@@ -1982,10 +2113,16 @@ function RecordTxnForm({ members, onSubmit }) {
   const [amount, setAmount] = useState('');
   const [paymentMode, setPaymentMode] = useState('cash');
   const [notes, setNotes] = useState('');
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [busy, setBusy] = useState(false);
+  const isAdjustment = type === 'balance_adjustment' || type === 'shares_adjustment';
   return (
     <Card>
-      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Record cash movement</div>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2 }}>Record cash movement</div>
+      <p style={{ fontSize: 11.5, color: THEME.inkSoft, margin: '0 0 10px' }}>
+        Use "Opening balance" once, when first bringing an existing member onto the system with their prior savings/shares.
+        Everything else logs a normal dated transaction — backdate it if you're entering something that happened earlier.
+      </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <Field label="Member">
           <select value={memberId} onChange={e => setMemberId(e.target.value)} style={inputStyle}>
@@ -1998,19 +2135,29 @@ function RecordTxnForm({ members, onSubmit }) {
             <option value="deposit">Savings deposit</option>
             <option value="withdrawal">Savings withdrawal</option>
             <option value="share_purchase">Share purchase</option>
+            <option value="dividend">Dividend received (historical)</option>
+            <option value="balance_adjustment">Opening savings balance — set to exact amount</option>
+            <option value="shares_adjustment">Opening shares balance — set to exact amount</option>
           </select>
         </Field>
-        <Field label="Mode of payment">
-          <select value={paymentMode} onChange={e => setPaymentMode(e.target.value)} style={inputStyle}>
-            {PAYMENT_MODES.map(pm => <option key={pm.value} value={pm.value}>{pm.label}</option>)}
-          </select>
+        {!isAdjustment && (
+          <Field label="Mode of payment">
+            <select value={paymentMode} onChange={e => setPaymentMode(e.target.value)} style={inputStyle}>
+              {PAYMENT_MODES.map(pm => <option key={pm.value} value={pm.value}>{pm.label}</option>)}
+            </select>
+          </Field>
+        )}
+        <Field label={type === 'balance_adjustment' ? 'Set savings balance to (UGX)' : type === 'shares_adjustment' ? 'Set shares balance to (UGX)' : 'Amount (UGX)'}>
+          <input type="number" min="0" value={amount} onChange={e => setAmount(e.target.value)} style={inputStyle} />
         </Field>
-        <Field label="Amount (UGX)"><input type="number" min="1" value={amount} onChange={e => setAmount(e.target.value)} style={inputStyle} /></Field>
-        <Field label="Notes"><input value={notes} onChange={e => setNotes(e.target.value)} style={inputStyle} placeholder="e.g. Mobile money confirmation code" /></Field>
-        <PrimaryButton disabled={busy || !memberId || !amount} onClick={async () => {
+        <Field label="Date">
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} style={inputStyle} max={new Date().toISOString().slice(0, 10)} />
+        </Field>
+        <Field label="Notes"><input value={notes} onChange={e => setNotes(e.target.value)} style={inputStyle} placeholder={isAdjustment ? 'e.g. Opening balance from paper ledger' : 'e.g. Mobile money confirmation code'} /></Field>
+        <PrimaryButton disabled={busy || !memberId || amount === ''} onClick={async () => {
           setBusy(true);
-          try { await onSubmit(memberId, type, amount, paymentMode, notes); setAmount(''); setNotes(''); } finally { setBusy(false); }
-        }}>{busy ? <Loader2 size={15} className="spin" /> : 'Record transaction'}</PrimaryButton>
+          try { await onSubmit(memberId, type, amount, paymentMode, notes, date); setAmount(''); setNotes(''); } finally { setBusy(false); }
+        }}>{busy ? <Loader2 size={15} className="spin" /> : isAdjustment ? 'Set opening balance' : 'Record transaction'}</PrimaryButton>
       </div>
     </Card>
   );

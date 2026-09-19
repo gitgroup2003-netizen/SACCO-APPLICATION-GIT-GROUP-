@@ -5,7 +5,7 @@ import {
   ArrowDownRight, Loader2, ShieldCheck, PieChart as PieIcon, Gift, FileText, Printer, Camera, Sun, Moon, Eye, EyeOff,
   PiggyBank, TrendingUp, Coins, Receipt, CreditCard, Sparkles
 } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, AreaChart, Area, Legend } from 'recharts';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://tupofpitveaifaemassc.supabase.co';
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable__jw3Hv0tG2wDnjvJ_8o8Qg_3RwRzn9F';
@@ -45,6 +45,15 @@ const DARK_PALETTE = {
 const THEME = { ...LIGHT_PALETTE };
 function applyThemeMode(mode) {
   Object.assign(THEME, mode === 'dark' ? DARK_PALETTE : LIGHT_PALETTE);
+}
+function useIsDesktop() {
+  const [isDesktop, setIsDesktop] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 1024);
+  useEffect(() => {
+    function onResize() { setIsDesktop(window.innerWidth >= 1024); }
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return isDesktop;
 }
 
 const LOAN_MULTIPLIER = 3; // ceiling = (savings + shares) x multiplier, per SACCO credit policy
@@ -1237,8 +1246,202 @@ function getPerms(role) {
   };
 }
 
+function DesktopSidebar({ tabs, active, onChange, profile, avatarUrl, themeMode, onToggleTheme, onLogout }) {
+  return (
+    <div style={{
+      width: 240, flexShrink: 0, background: THEME.surface, borderRight: `1px solid ${THEME.line}`,
+      display: 'flex', flexDirection: 'column', padding: '24px 16px', height: '100vh', position: 'sticky', top: 0,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 8px', marginBottom: 30 }}>
+        <div style={{
+          width: 36, height: 36, borderRadius: 10, background: `linear-gradient(135deg, ${THEME.pine}, ${THEME.pineDark})`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <ShieldCheck size={18} color={THEME.goldLight} />
+        </div>
+        <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, color: THEME.ink }}>Amani SACCO</div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1 }}>
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => onChange(t.key)} style={{
+            display: 'flex', alignItems: 'center', gap: 11, padding: '11px 12px', borderRadius: 10, border: 'none',
+            cursor: 'pointer', textAlign: 'left', fontSize: 14, fontWeight: 600,
+            background: active === t.key ? THEME.pine : 'transparent',
+            color: active === t.key ? '#fff' : THEME.inkSoft,
+          }}>
+            <t.icon size={17} />
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <button onClick={onToggleTheme} style={{
+        display: 'flex', alignItems: 'center', gap: 11, padding: '11px 12px', borderRadius: 10, border: 'none',
+        cursor: 'pointer', textAlign: 'left', fontSize: 14, fontWeight: 600, background: 'transparent', color: THEME.inkSoft, marginBottom: 4,
+      }}>
+        {themeMode === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+        {themeMode === 'dark' ? 'Light mode' : 'Dark mode'}
+      </button>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 12, background: THEME.paper, marginTop: 8 }}>
+        <Avatar name={profile.full_name} photoUrl={avatarUrl} size={36} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{profile.full_name}</div>
+          <div style={{ fontSize: 11, color: THEME.inkSoft }}>{ROLE_LABELS[profile.role] || profile.role}</div>
+        </div>
+        <button onClick={onLogout} title="Sign out" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}>
+          <LogOut size={15} color={THEME.inkSoft} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DesktopOverview({
+  profile, totalSavings, totalShares, totalOutstanding, chartData, cashFlowData, statsPeriod, setStatsPeriod,
+  txnsAll, profileMap, profiles, memberPhotoUrls, pendingMembers, pendingLoans,
+}) {
+  const dailyActivity = useMemo(() => {
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i); d.setHours(0, 0, 0, 0);
+      days.push({ date: d, label: d.toLocaleDateString('en-GB', { weekday: 'short' }), Deposit: 0, Withdraw: 0 });
+    }
+    txnsAll.forEach(t => {
+      const d = new Date(t.created_at); d.setHours(0, 0, 0, 0);
+      const bucket = days.find(x => x.date.getTime() === d.getTime());
+      if (!bucket) return;
+      if (['deposit', 'share_purchase'].includes(t.type)) bucket.Deposit += Number(t.amount);
+      if (t.type === 'withdrawal') bucket.Withdraw += Number(t.amount);
+    });
+    return days.map(d => ({ name: d.label, Deposit: Math.round(d.Deposit), Withdraw: Math.round(d.Withdraw) }));
+  }, [txnsAll]);
+
+  const recentTxns = txnsAll.slice(0, 6);
+  const recentMembers = profiles.slice(0, 6);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20, alignItems: 'start' }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>My cards</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div style={{
+              background: `linear-gradient(135deg, ${THEME.pine}, ${THEME.pineDark})`, borderRadius: 16, padding: 18, color: '#fff', minHeight: 130,
+              display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 12, fontWeight: 700 }}>AMANI SACCO</span>
+                <span style={{ fontSize: 10, background: 'rgba(255,255,255,0.2)', padding: '2px 8px', borderRadius: 999 }}>SAVINGS</span>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)' }}>Total member savings</div>
+                <div style={{ fontFamily: 'Fraunces, serif', fontSize: 22, marginTop: 2 }}>{fmt(totalSavings)}</div>
+              </div>
+            </div>
+            <div style={{
+              background: `linear-gradient(135deg, ${THEME.gold}, #8a5a00)`, borderRadius: 16, padding: 18, color: '#fff', minHeight: 130,
+              display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 12, fontWeight: 700 }}>AMANI SACCO</span>
+                <span style={{ fontSize: 10, background: 'rgba(255,255,255,0.25)', padding: '2px 8px', borderRadius: 999 }}>SHARES</span>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.85)' }}>Total member shares</div>
+                <div style={{ fontFamily: 'Fraunces, serif', fontSize: 22, marginTop: 2 }}>{fmt(totalShares)}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <Card>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Recent transactions</div>
+          {recentTxns.length === 0 ? <EmptyState text="No transactions yet." /> : recentTxns.map(t => {
+            const isCredit = ['deposit', 'loan_disbursement', 'dividend', 'share_purchase'].includes(t.type);
+            return (
+              <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: `1px solid ${THEME.line}` }}>
+                <div style={{
+                  width: 26, height: 26, borderRadius: 8, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: (isCredit ? THEME.success : THEME.danger) + '1a',
+                }}>
+                  {isCredit ? <ArrowDownRight size={13} color={THEME.success} /> : <ArrowUpRight size={13} color={THEME.danger} />}
+                </div>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {(profileMap[t.member_id] || {}).full_name || 'Member'}
+                  </div>
+                  <div style={{ fontSize: 10, color: THEME.inkSoft }}>{fmtDate(t.created_at)}</div>
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: isCredit ? THEME.success : THEME.danger, whiteSpace: 'nowrap' }}>
+                  {isCredit ? '+' : '−'}{fmt(t.amount)}
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: 20, alignItems: 'start' }}>
+        <Card>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>Weekly activity</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {['month', 'year'].map(p => (
+                <button key={p} onClick={() => setStatsPeriod(p)} style={{
+                  padding: '5px 12px', borderRadius: 8, border: `1px solid ${THEME.line}`, cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                  background: statsPeriod === p ? THEME.pine : 'transparent', color: statsPeriod === p ? '#fff' : THEME.inkSoft,
+                }}>{p === 'month' ? 'This month' : 'This year'}</button>
+              ))}
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={230}>
+            <BarChart data={dailyActivity}>
+              <CartesianGrid stroke={THEME.line} vertical={false} />
+              <XAxis dataKey="name" tick={{ fontSize: 11, fill: THEME.inkSoft }} axisLine={{ stroke: THEME.line }} tickLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: THEME.inkSoft }} axisLine={false} tickLine={false} width={44} />
+              <Tooltip formatter={(v) => fmt(v)} contentStyle={{ borderRadius: 8, border: `1px solid ${THEME.line}`, fontSize: 12, background: THEME.surface, color: THEME.ink }} itemStyle={{ color: THEME.ink }} labelStyle={{ color: THEME.ink }} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Bar dataKey="Deposit" fill={THEME.pine} radius={[5, 5, 0, 0]} />
+              <Bar dataKey="Withdraw" fill={THEME.gold} radius={[5, 5, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+
+        <Card>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>Fund composition</div>
+          {chartData.every(d => d.value === 0) ? <EmptyState text="No funds recorded yet." /> : (
+            <DonutChart data={chartData} colors={[THEME.pine, THEME.gold, THEME.danger, THEME.success]} />
+          )}
+        </Card>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+        <StatCard label="Members" value={profiles.length} icon={Users} />
+        <StatCard label="Pending approvals" value={pendingMembers.length} accent={pendingMembers.length ? THEME.gold : THEME.ink} icon={ShieldCheck} />
+        <StatCard label="Pending loans" value={pendingLoans.length} accent={THEME.gold} icon={Landmark} />
+      </div>
+
+      <Card>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Members</div>
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+          {recentMembers.length === 0 ? <EmptyState text="No members yet." /> : recentMembers.map(m => (
+            <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, width: 64 }}>
+              <Avatar name={m.full_name} photoUrl={memberPhotoUrls[m.id]} size={44} />
+              <span style={{ fontSize: 11, color: THEME.inkSoft, textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%' }}>
+                {m.full_name.split(' ')[0]}
+              </span>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const perms = getPerms(profile.role);
+  const isDesktop = useIsDesktop();
   const [viewMemberId, setViewMemberId] = useState(null);
   const [myPhotoUrl, setMyPhotoUrl] = useState(null);
   const [statsPeriod, setStatsPeriod] = useState('month');
@@ -1449,16 +1652,10 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
     if (!tabs.some(t => t.key === tab)) setTab('overview');
   }, [profile.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return (
-    <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100vh', background: THEME.paper, display: 'flex', flexDirection: 'column' }}>
-      <Header title="Amani SACCO" subtitle={`${ROLE_LABELS[profile.role] || profile.role} · ${profile.full_name}`} onLogout={onLogout}
-        avatarUrl={myPhotoUrl} avatarName={profile.full_name} themeMode={themeMode} onToggleTheme={onToggleTheme}
-        roleBadge={<Badge color={profile.role === 'manager' ? THEME.gold : THEME.pine}>{ROLE_LABELS[profile.role] || profile.role}</Badge>} />
-
-      <div style={{ flex: 1, padding: '0 20px 20px', overflowY: 'auto' }}>
-        {loading ? <Spinner /> : (
-          <>
-            {tab === 'overview' && (
+  const tabContent = (
+    loading ? <Spinner /> : (
+      <>
+        {tab === 'overview' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <SaccoCard totalAssets={totalSavings + totalShares} />
 
@@ -1702,8 +1899,47 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                 </Card>
               </div>
             )}
-          </>
-        )}
+      </>
+    )
+  );
+
+  if (isDesktop) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', background: THEME.paper }}>
+        <DesktopSidebar
+          tabs={tabs} active={tab} onChange={setTab} profile={profile} avatarUrl={myPhotoUrl}
+          themeMode={themeMode} onToggleTheme={onToggleTheme} onLogout={onLogout}
+        />
+        <div style={{ flex: 1, padding: '28px 36px', overflowY: 'auto', minWidth: 0 }}>
+          <div style={{ fontFamily: 'Fraunces, serif', fontSize: 24, color: THEME.ink, marginBottom: 22 }}>
+            {tabs.find(t => t.key === tab)?.label || 'Overview'}
+          </div>
+          {loading ? <Spinner /> : (
+            tab === 'overview' ? (
+              <DesktopOverview
+                profile={profile} totalSavings={totalSavings} totalShares={totalShares} totalOutstanding={totalOutstanding}
+                chartData={chartData} cashFlowData={cashFlowData} trendData={trendData} statsPeriod={statsPeriod} setStatsPeriod={setStatsPeriod}
+                txnsAll={txnsAll} profileMap={profileMap} profiles={profiles} memberPhotoUrls={memberPhotoUrls}
+                pendingMembers={pendingMembers} pendingLoans={pendingLoans}
+              />
+            ) : (
+              <div style={{ maxWidth: 900 }}>{tabContent}</div>
+            )
+          )}
+        </div>
+        {viewMemberId && <MemberDetailModal memberId={viewMemberId} token={token} onClose={() => setViewMemberId(null)} />}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100vh', background: THEME.paper, display: 'flex', flexDirection: 'column' }}>
+      <Header title="Amani SACCO" subtitle={`${ROLE_LABELS[profile.role] || profile.role} · ${profile.full_name}`} onLogout={onLogout}
+        avatarUrl={myPhotoUrl} avatarName={profile.full_name} themeMode={themeMode} onToggleTheme={onToggleTheme}
+        roleBadge={<Badge color={profile.role === 'manager' ? THEME.gold : THEME.pine}>{ROLE_LABELS[profile.role] || profile.role}</Badge>} />
+
+      <div style={{ flex: 1, padding: '0 20px 20px', overflowY: 'auto' }}>
+        {tabContent}
       </div>
 
       {viewMemberId && <MemberDetailModal memberId={viewMemberId} token={token} onClose={() => setViewMemberId(null)} />}

@@ -1262,9 +1262,7 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                   <div style={{ fontFamily: 'Fraunces, serif', fontSize: 20, color: THEME.ink }}>Hi, {profile.full_name.split(' ')[0]}</div>
                   <div style={{ fontSize: 13, color: THEME.inkSoft, marginTop: 2 }}>Here's where your savings stand today</div>
                 </div>
-                <div onClick={() => setTab('activity')} style={{ cursor: 'pointer' }}>
-                  <BalanceHeroCard savings={savings} shares={shares} />
-                </div>
+                <BalanceHeroCard savings={savings} shares={shares} />
                 <QuickActions actions={[
                   { label: 'Apply loan', icon: Landmark, onClick: () => setTab('loans') },
                   { label: 'Statement', icon: FileText, onClick: () => setShowStatement(true) },
@@ -1285,12 +1283,8 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                   );
                 })()}
                 <div style={{ display: 'flex', gap: 10 }}>
-                  <div onClick={() => setTab('activity')} style={{ flex: 1, cursor: 'pointer' }}>
-                    <StatCard label="Savings" value={fmt(savings.balance)} accent={THEME.pine} icon={PiggyBank} />
-                  </div>
-                  <div onClick={() => setTab('activity')} style={{ flex: 1, cursor: 'pointer' }}>
-                    <StatCard label="Shares" value={fmt(shares.balance)} accent={THEME.gold} icon={Coins} />
-                  </div>
+                  <StatCard label="Savings" value={fmt(savings.balance)} accent={THEME.pine} icon={PiggyBank} />
+                  <StatCard label="Shares" value={fmt(shares.balance)} accent={THEME.gold} icon={Coins} />
                 </div>
                 {activeLoan && (
                   <div onClick={() => setTab('loans')} style={{ cursor: 'pointer' }}>
@@ -1618,7 +1612,7 @@ function DesktopOverview({
     return days.map(d => ({ name: d.label, Deposit: Math.round(d.Deposit), Withdraw: Math.round(d.Withdraw) }));
   }, [txnsAll]);
 
-  const recentTxns = txnsAll.slice(0, 6);
+  const recentTxns = txnsAll.slice(0, 30);
   const recentMembers = profiles.slice(0, 6);
 
   return (
@@ -1657,28 +1651,30 @@ function DesktopOverview({
         </div>
         <Card>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Recent transactions</div>
-          {recentTxns.length === 0 ? <EmptyState text="No transactions yet." /> : recentTxns.map(t => {
-            const isCredit = ['deposit', 'loan_disbursement', 'dividend', 'share_purchase'].includes(t.type);
-            return (
-              <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: `1px solid ${THEME.line}` }}>
-                <div style={{
-                  width: 26, height: 26, borderRadius: 8, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: (isCredit ? THEME.success : THEME.danger) + '1a',
-                }}>
-                  {isCredit ? <ArrowDownRight size={13} color={THEME.success} /> : <ArrowUpRight size={13} color={THEME.danger} />}
-                </div>
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {(profileMap[t.member_id] || {}).full_name || 'Member'}
+          <div style={{ maxHeight: 320, overflowY: 'auto', paddingRight: 4 }}>
+            {recentTxns.length === 0 ? <EmptyState text="No transactions yet." /> : recentTxns.map(t => {
+              const isCredit = ['deposit', 'loan_disbursement', 'dividend', 'share_purchase'].includes(t.type);
+              return (
+                <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: `1px solid ${THEME.line}` }}>
+                  <div style={{
+                    width: 26, height: 26, borderRadius: 8, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: (isCredit ? THEME.success : THEME.danger) + '1a',
+                  }}>
+                    {isCredit ? <ArrowDownRight size={13} color={THEME.success} /> : <ArrowUpRight size={13} color={THEME.danger} />}
                   </div>
-                  <div style={{ fontSize: 10, color: THEME.inkSoft }}>{fmtDate(t.created_at)}</div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {(profileMap[t.member_id] || {}).full_name || 'Member'}
+                    </div>
+                    <div style={{ fontSize: 10, color: THEME.inkSoft }}>{fmtDate(t.created_at)}</div>
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: isCredit ? THEME.success : THEME.danger, whiteSpace: 'nowrap' }}>
+                    {isCredit ? '+' : '−'}{fmt(t.amount)}
+                  </div>
                 </div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: isCredit ? THEME.success : THEME.danger, whiteSpace: 'nowrap' }}>
-                  {isCredit ? '+' : '−'}{fmt(t.amount)}
-                </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </Card>
       </div>
 
@@ -1745,6 +1741,7 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const [viewMemberId, setViewMemberId] = useState(null);
   const [myPhotoUrl, setMyPhotoUrl] = useState(null);
   const [statsPeriod, setStatsPeriod] = useState('month');
+  const [showAddMember, setShowAddMember] = useState(false);
   const [memberPhotoUrls, setMemberPhotoUrls] = useState({});
   const [tab, setTab] = useState('overview');
   const [loading, setLoading] = useState(true);
@@ -1857,6 +1854,66 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
       method: 'POST', token, headers: { Prefer: 'return=minimal' },
       body: { title, body, created_by: profile.id },
     });
+    await load();
+  }
+
+  async function addExistingMember(form) {
+    // 1. Create the auth account (public signup endpoint — safe, no elevated key needed)
+    const signupRes = await sb('/auth/v1/signup', {
+      method: 'POST',
+      body: { email: form.email, password: form.password, data: { full_name: form.fullName, phone: form.phone } },
+    });
+    const newUserId = signupRes && signupRes.user && signupRes.user.id;
+    if (!newUserId) throw new Error('Could not create the member account — the response did not include a user id.');
+
+    // 2. Photo (optional) — uploaded using the MANAGER's own token, permitted by the
+    //    manager-only storage policy added for exactly this onboarding flow.
+    let photoPath = null;
+    if (form.photoFile) {
+      photoPath = await uploadKycPhoto(token, newUserId, form.photoFile);
+    }
+
+    // 3. Approve immediately and fill in KYC / next-of-kin, using the manager's own token
+    const profilePatch = { status: 'active' };
+    if (form.nin) profilePatch.nin = form.nin;
+    if (photoPath) profilePatch.photo_url = photoPath;
+    if (form.nokName) profilePatch.next_of_kin_name = form.nokName;
+    if (form.nokPhone) profilePatch.next_of_kin_phone = form.nokPhone;
+    if (form.nokRelationship) profilePatch.next_of_kin_relationship = form.nokRelationship;
+    await sb(`/rest/v1/profiles?id=eq.${newUserId}`, { method: 'PATCH', token, headers: { Prefer: 'return=minimal' }, body: profilePatch });
+
+    // 4. Opening balances
+    const openingSavings = Number(form.openingSavings) || 0;
+    const openingShares = Number(form.openingShares) || 0;
+    await sb(`/rest/v1/savings_accounts?member_id=eq.${newUserId}`, {
+      method: 'PATCH', token, headers: { Prefer: 'return=minimal' }, body: { balance: openingSavings, updated_at: new Date().toISOString() },
+    });
+    await sb(`/rest/v1/shares?member_id=eq.${newUserId}`, {
+      method: 'PATCH', token, headers: { Prefer: 'return=minimal' }, body: { balance: openingShares, updated_at: new Date().toISOString() },
+    });
+    await sb('/rest/v1/transactions', {
+      method: 'POST', token, headers: { Prefer: 'return=minimal' },
+      body: { member_id: newUserId, type: 'balance_adjustment', amount: openingSavings, balance_after: openingSavings, payment_mode: 'other', notes: 'Opening savings balance (existing member onboarded)', created_by: profile.id },
+    });
+    await sb('/rest/v1/transactions', {
+      method: 'POST', token, headers: { Prefer: 'return=minimal' },
+      body: { member_id: newUserId, type: 'shares_adjustment', amount: openingShares, balance_after: openingShares, payment_mode: 'other', notes: 'Opening shares balance (existing member onboarded)', created_by: profile.id },
+    });
+
+    // 5. Optional: log their most recent known transaction, for audit continuity
+    if (form.lastTxnType && form.lastTxnAmount) {
+      const createdAt = form.lastTxnDate ? new Date(form.lastTxnDate + 'T12:00:00').toISOString() : new Date().toISOString();
+      const balanceAfter = form.lastTxnType === 'share_purchase' ? openingShares : openingSavings;
+      await sb('/rest/v1/transactions', {
+        method: 'POST', token, headers: { Prefer: 'return=minimal' },
+        body: {
+          member_id: newUserId, type: form.lastTxnType, amount: Number(form.lastTxnAmount), balance_after: balanceAfter,
+          payment_mode: form.lastTxnPaymentMode || 'other', notes: form.lastTxnNotes || 'Most recent transaction on record at onboarding',
+          created_by: profile.id, created_at: createdAt,
+        },
+      });
+    }
+
     await load();
   }
 
@@ -2114,6 +2171,13 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
 
             {tab === 'members' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                {perms.approveAccounts && (
+                  showAddMember ? (
+                    <AddExistingMemberForm onSubmit={addExistingMember} onClose={() => setShowAddMember(false)} />
+                  ) : (
+                    <PrimaryButton onClick={() => setShowAddMember(true)}><Plus size={15} /> Add an existing member</PrimaryButton>
+                  )
+                )}
                 {(profile.role === 'manager' || profile.role === 'supervisor') && (
                   <Card>
                     <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Export for audit</div>
@@ -2512,6 +2576,130 @@ function RecordTxnForm({ members, onSubmit }) {
           setBusy(true);
           try { await onSubmit(memberId, type, amount, paymentMode, notes, date); setAmount(''); setNotes(''); } finally { setBusy(false); }
         }}>{busy ? <Loader2 size={15} className="spin" /> : isAdjustment ? 'Set opening balance' : 'Record transaction'}</PrimaryButton>
+      </div>
+    </Card>
+  );
+}
+
+function AddExistingMemberForm({ onSubmit, onClose }) {
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [phone, setPhone] = useState('');
+  const [nin, setNin] = useState('');
+  const [nokName, setNokName] = useState('');
+  const [nokPhone, setNokPhone] = useState('');
+  const [nokRelationship, setNokRelationship] = useState('');
+  const [openingSavings, setOpeningSavings] = useState('0');
+  const [openingShares, setOpeningShares] = useState('0');
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoPreview, setPhotoPreview] = useState(null);
+  const [lastTxnType, setLastTxnType] = useState('');
+  const [lastTxnAmount, setLastTxnAmount] = useState('');
+  const [lastTxnDate, setLastTxnDate] = useState('');
+  const [lastTxnPaymentMode, setLastTxnPaymentMode] = useState('cash');
+  const [lastTxnNotes, setLastTxnNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  function handlePhoto(f) {
+    if (!f) return;
+    setPhotoFile(f);
+    setPhotoPreview(URL.createObjectURL(f));
+  }
+
+  async function handleSubmit() {
+    setError('');
+    if (!fullName.trim() || !email.trim() || password.length < 6) {
+      setError('Full name, email, and a password of at least 6 characters are required.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await onSubmit({
+        fullName: fullName.trim(), email: email.trim(), password, phone: phone.trim(), nin: nin.trim(),
+        nokName: nokName.trim(), nokPhone: nokPhone.trim(), nokRelationship: nokRelationship.trim(),
+        openingSavings, openingShares, photoFile,
+        lastTxnType, lastTxnAmount, lastTxnDate, lastTxnPaymentMode, lastTxnNotes,
+      });
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Add an existing member</div>
+      <p style={{ fontSize: 11.5, color: THEME.inkSoft, margin: '0 0 12px' }}>
+        For someone who was already a SACCO member on paper. This creates their account, approves it immediately, and
+        records their current balances so they can start using the app right away. They'll need this email and
+        password to log in the first time (Supabase may also require them to confirm their email first, depending on
+        your project's auth settings).
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+          {photoPreview ? (
+            <img src={photoPreview} alt="Preview" style={{ width: 72, height: 72, borderRadius: '50%', objectFit: 'cover' }} />
+          ) : <Avatar name={fullName || '?'} size={72} />}
+          <CameraCapture onCapture={handlePhoto} />
+          <label style={{ cursor: 'pointer' }}>
+            <span style={{ fontSize: 12, color: THEME.inkSoft, textDecoration: 'underline' }}>or upload a photo</span>
+            <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => handlePhoto(e.target.files[0])} />
+          </label>
+        </div>
+        <Field label="Full name *"><input value={fullName} onChange={e => setFullName(e.target.value)} style={inputStyle} /></Field>
+        <Field label="Email * (used to log in)"><input type="email" value={email} onChange={e => setEmail(e.target.value)} style={inputStyle} /></Field>
+        <Field label="Temporary password * (min 6 characters)"><input type="text" value={password} onChange={e => setPassword(e.target.value)} style={inputStyle} placeholder="Share this with the member" /></Field>
+        <Field label="Phone"><input value={phone} onChange={e => setPhone(e.target.value)} style={inputStyle} /></Field>
+        <Field label="NIN"><input value={nin} onChange={e => setNin(e.target.value)} style={inputStyle} /></Field>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <Field label="Opening savings (UGX)"><input type="number" min="0" value={openingSavings} onChange={e => setOpeningSavings(e.target.value)} style={inputStyle} /></Field>
+          <Field label="Opening shares (UGX)"><input type="number" min="0" value={openingShares} onChange={e => setOpeningShares(e.target.value)} style={inputStyle} /></Field>
+        </div>
+
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>Next of kin (if provided)</div>
+        <Field label="Full name"><input value={nokName} onChange={e => setNokName(e.target.value)} style={inputStyle} /></Field>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <Field label="Relationship"><input value={nokRelationship} onChange={e => setNokRelationship(e.target.value)} style={inputStyle} /></Field>
+          <Field label="Phone"><input value={nokPhone} onChange={e => setNokPhone(e.target.value)} style={inputStyle} /></Field>
+        </div>
+
+        <div style={{ fontWeight: 700, fontSize: 13, marginTop: 4 }}>Most recent transaction on record (optional)</div>
+        <p style={{ fontSize: 11, color: THEME.inkSoft, margin: 0 }}>Just for audit history — it won't change the opening balance above.</p>
+        <Field label="Type">
+          <select value={lastTxnType} onChange={e => setLastTxnType(e.target.value)} style={inputStyle}>
+            <option value="">Not applicable</option>
+            <option value="deposit">Savings deposit</option>
+            <option value="withdrawal">Savings withdrawal</option>
+            <option value="share_purchase">Share purchase</option>
+            <option value="dividend">Dividend received</option>
+          </select>
+        </Field>
+        {lastTxnType && (
+          <>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <Field label="Amount (UGX)"><input type="number" min="0" value={lastTxnAmount} onChange={e => setLastTxnAmount(e.target.value)} style={inputStyle} /></Field>
+              <Field label="Date"><input type="date" value={lastTxnDate} onChange={e => setLastTxnDate(e.target.value)} style={inputStyle} max={new Date().toISOString().slice(0, 10)} /></Field>
+            </div>
+            <Field label="Mode of payment">
+              <select value={lastTxnPaymentMode} onChange={e => setLastTxnPaymentMode(e.target.value)} style={inputStyle}>
+                {PAYMENT_MODES.map(pm => <option key={pm.value} value={pm.value}>{pm.label}</option>)}
+              </select>
+            </Field>
+            <Field label="Notes"><input value={lastTxnNotes} onChange={e => setLastTxnNotes(e.target.value)} style={inputStyle} /></Field>
+          </>
+        )}
+
+        {error && <div style={{ color: THEME.danger, fontSize: 12 }}>{error}</div>}
+        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <PrimaryButton style={{ flex: 1 }} disabled={busy} onClick={handleSubmit}>
+            {busy ? <Loader2 size={15} className="spin" /> : 'Create and approve member'}
+          </PrimaryButton>
+          <GhostButton onClick={onClose}>Cancel</GhostButton>
+        </div>
       </div>
     </Card>
   );

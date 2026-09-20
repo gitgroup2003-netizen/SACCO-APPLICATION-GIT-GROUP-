@@ -2171,7 +2171,7 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
 
             {tab === 'members' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-                {perms.approveAccounts && (
+                {['manager', 'admin', 'administrator'].includes(String(profile.role || '').trim().toLowerCase()) && (
                   showAddMember ? (
                     <AddExistingMemberForm onSubmit={addExistingMember} onClose={() => setShowAddMember(false)} />
                   ) : (

@@ -5,7 +5,7 @@ import * as XLSX from 'xlsx';
 import {
   Home, Landmark, Wallet, Users, LogOut, Plus, Check, X, ArrowUpRight,
   ArrowDownRight, Loader2, ShieldCheck, PieChart as PieIcon, Gift, FileText, Printer, Camera, Sun, Moon, Eye, EyeOff,
-  PiggyBank, TrendingUp, Coins, Receipt, CreditCard, Sparkles
+  PiggyBank, TrendingUp, Coins, Receipt, CreditCard, Sparkles, Bell, Megaphone
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, AreaChart, Area, Legend } from 'recharts';
 
@@ -114,8 +114,8 @@ async function sb(path, { method = 'GET', body, token, headers = {} } = {}) {
   return data;
 }
 
-async function uploadKycPhoto(token, userId, file) {
-  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/kyc-photos/${userId}/photo.jpg`, {
+async function uploadKycPhoto(token, userId, file, filename = 'photo.jpg') {
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/kyc-photos/${userId}/${filename}`, {
     method: 'POST',
     headers: { apikey: ANON_KEY, Authorization: `Bearer ${token}`, 'Content-Type': file.type || 'image/jpeg', 'x-upsert': 'true' },
     body: file,
@@ -124,7 +124,7 @@ async function uploadKycPhoto(token, userId, file) {
     const text = await res.text().catch(() => '');
     throw new Error('Photo upload failed: ' + text);
   }
-  return `${userId}/photo.jpg`;
+  return `${userId}/${filename}`;
 }
 
 async function getSignedPhotoUrl(token, path) {
@@ -141,6 +141,26 @@ async function getSignedPhotoUrl(token, path) {
   } catch {
     return null;
   }
+}
+
+// Checks for a newer announcement than the last one this device has seen,
+// and fires a browser notification if permission has been granted. The
+// very first check on a device only "arms" the baseline — it never fires
+// a notification for announcements that already existed before this
+// device started checking, only for ones that arrive afterwards.
+async function checkAndNotifyAnnouncements(token) {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  try {
+    const anns = await sb('/rest/v1/announcements?select=*&order=created_at.desc&limit=1', { token });
+    const latest = anns && anns[0];
+    if (!latest) return;
+    const lastSeen = localStorage.getItem('amani_last_announcement_seen');
+    if (lastSeen === latest.id) return;
+    if (lastSeen !== null) {
+      new Notification(latest.title, { body: latest.body, icon: '/icon-192.png' });
+    }
+    localStorage.setItem('amani_last_announcement_seen', latest.id);
+  } catch { /* ignore — notifications are best-effort */ }
 }
 
 /* ---------------------------- shared bits ---------------------------- */
@@ -251,6 +271,23 @@ function QuickActions({ actions }) {
     </div>
   );
 }
+function NotificationPrompt() {
+  const [permission, setPermission] = useState(() => (typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'));
+  if (permission !== 'default') return null;
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, background: THEME.pine + '12', border: `1px solid ${THEME.pine}33`,
+      borderRadius: 12, padding: '10px 12px', marginBottom: 14,
+    }}>
+      <Bell size={16} color={THEME.pine} style={{ flexShrink: 0 }} />
+      <span style={{ fontSize: 12, color: THEME.ink, flex: 1 }}>Get notified about new messages and updates.</span>
+      <GhostButton style={{ padding: '6px 12px', fontSize: 12 }} onClick={() => Notification.requestPermission().then(setPermission)}>
+        Enable
+      </GhostButton>
+    </div>
+  );
+}
+
 function EmptyState({ text }) {
   return <div style={{ textAlign: 'center', color: THEME.inkSoft, fontSize: 13, padding: '28px 0' }}>{text}</div>;
 }
@@ -758,6 +795,56 @@ function getTierProgress(total) {
   const pct = Math.min(100, Math.round(((total - current.min) / (next.min - current.min)) * 100));
   return { current, next, pct };
 }
+function WithdrawalRequestCard({ savings, withdrawalRequests, onRequest }) {
+  const [showForm, setShowForm] = useState(false);
+  const [amount, setAmount] = useState('');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const balance = Number(savings.balance);
+  const hasPending = withdrawalRequests.some(r => r.status === 'pending');
+  const amountNum = Number(amount);
+  const overBalance = amountNum > balance;
+
+  return (
+    <Card>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+        <div style={{ fontWeight: 700, fontSize: 14 }}>Withdraw savings</div>
+        {balance > 0 && !hasPending && (
+          <GhostButton onClick={() => setShowForm(v => !v)}>{showForm ? 'Cancel' : 'Request'}</GhostButton>
+        )}
+      </div>
+      {balance <= 0 ? (
+        <p style={{ fontSize: 12, color: THEME.inkSoft, margin: 0 }}>You have no savings balance to withdraw from yet.</p>
+      ) : hasPending ? (
+        <p style={{ fontSize: 12, color: THEME.inkSoft, margin: 0 }}>You already have a withdrawal request pending review.</p>
+      ) : showForm ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 6 }}>
+          <p style={{ fontSize: 11.5, color: THEME.inkSoft, margin: 0 }}>Available: {fmt(balance)}</p>
+          <Field label="Amount (UGX)"><input type="number" min="1" max={balance} value={amount} onChange={e => setAmount(e.target.value)} style={inputStyle} /></Field>
+          {overBalance && <div style={{ fontSize: 12, color: THEME.danger }}>You can't request more than your available savings.</div>}
+          <Field label="Reason (optional)"><input value={note} onChange={e => setNote(e.target.value)} style={inputStyle} placeholder="e.g. Medical expense" /></Field>
+          <PrimaryButton disabled={busy || !amount || overBalance || amountNum <= 0} onClick={async () => {
+            setBusy(true);
+            try { await onRequest(amount, note); setShowForm(false); setAmount(''); setNote(''); } finally { setBusy(false); }
+          }}>{busy ? <Loader2 size={15} className="spin" /> : 'Submit request'}</PrimaryButton>
+        </div>
+      ) : (
+        <p style={{ fontSize: 12, color: THEME.inkSoft, margin: 0 }}>Request a withdrawal and a cashier or manager will process it.</p>
+      )}
+      {withdrawalRequests.length > 0 && (
+        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {withdrawalRequests.slice(0, 3).map(r => (
+            <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '6px 0', borderTop: `1px solid ${THEME.line}` }}>
+              <span>{fmtDate(r.requested_at)} · {fmt(r.amount)}</span>
+              <Badge color={statusColor(r.status === 'approved' ? 'active' : r.status)}>{r.status}</Badge>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function TierProgressCard({ total }) {
   const { current, next, pct } = getTierProgress(total);
   return (
@@ -949,17 +1036,48 @@ function ProfileTab({ profile, token, photoUrl }) {
   const [nokName, setNokName] = useState(profile.next_of_kin_name || '');
   const [nokPhone, setNokPhone] = useState(profile.next_of_kin_phone || '');
   const [nokRel, setNokRel] = useState(profile.next_of_kin_relationship || '');
-  const [saved, setSaved] = useState(false);
+  const [phone, setPhone] = useState(profile.phone || '');
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [myRequests, setMyRequests] = useState([]);
+  const [loadingRequests, setLoadingRequests] = useState(true);
 
-  async function save() {
-    setBusy(true); setSaved(false);
+  const loadRequests = useCallback(async () => {
+    setLoadingRequests(true);
+    const rows = await sb(`/rest/v1/profile_change_requests?member_id=eq.${profile.id}&select=*&order=requested_at.desc&limit=5`, { token });
+    setMyRequests(rows || []);
+    setLoadingRequests(false);
+  }, [profile.id, token]);
+
+  useEffect(() => { loadRequests(); }, [loadRequests]);
+
+  const hasPending = myRequests.some(r => r.status === 'pending');
+
+  function handleFile(f) {
+    if (!f) return;
+    setFile(f);
+    setPreview(URL.createObjectURL(f));
+  }
+
+  async function submitRequest() {
+    setError(''); setBusy(true);
     try {
-      await sb(`/rest/v1/profiles?id=eq.${profile.id}`, {
-        method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
-        body: { next_of_kin_name: nokName.trim(), next_of_kin_phone: nokPhone.trim(), next_of_kin_relationship: nokRel.trim() },
-      });
-      setSaved(true);
+      let newPhotoPath = null;
+      if (file) newPhotoPath = await uploadKycPhoto(token, profile.id, file, 'pending-photo.jpg');
+      const body = { member_id: profile.id };
+      if (phone.trim() !== (profile.phone || '')) body.new_phone = phone.trim();
+      if (nokName.trim() !== (profile.next_of_kin_name || '')) body.new_next_of_kin_name = nokName.trim();
+      if (nokPhone.trim() !== (profile.next_of_kin_phone || '')) body.new_next_of_kin_phone = nokPhone.trim();
+      if (nokRel.trim() !== (profile.next_of_kin_relationship || '')) body.new_next_of_kin_relationship = nokRel.trim();
+      if (newPhotoPath) body.new_photo_url = newPhotoPath;
+      if (Object.keys(body).length <= 1) { setError('Change something before submitting.'); setBusy(false); return; }
+      await sb('/rest/v1/profile_change_requests', { method: 'POST', token, headers: { Prefer: 'return=minimal' }, body });
+      setFile(null); setPreview(null);
+      await loadRequests();
+    } catch (err) {
+      setError(err.message);
     } finally {
       setBusy(false);
     }
@@ -977,25 +1095,61 @@ function ProfileTab({ profile, token, photoUrl }) {
       </Card>
       <AutoDebitCard memberName={profile.full_name} />
       <Card>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Next of kin</div>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Update your details</div>
         <p style={{ fontSize: 12, color: THEME.inkSoft, margin: '0 0 12px' }}>
-          Kept on file for the SACCO's records — used only if you're ever unreachable.
+          Changes to your photo, phone, or next of kin go to a manager for approval before they take effect — this
+          protects your account from unauthorized changes.
         </p>
+        {hasPending && (
+          <div style={{ fontSize: 12, color: THEME.gold, background: THEME.gold + '14', border: `1px solid ${THEME.gold}55`, borderRadius: 8, padding: '8px 10px', marginBottom: 12 }}>
+            You have a change request awaiting approval. You can still browse your details below, but wait for that one to be decided before submitting another.
+          </div>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <Field label="Full name">
-            <input value={nokName} onChange={e => setNokName(e.target.value)} style={inputStyle} placeholder="e.g. Jane Doe" />
-          </Field>
-          <Field label="Relationship">
-            <input value={nokRel} onChange={e => setNokRel(e.target.value)} style={inputStyle} placeholder="e.g. Spouse, Parent, Sibling" />
-          </Field>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+            {preview && <img src={preview} alt="New photo preview" style={{ width: 72, height: 72, borderRadius: '50%', objectFit: 'cover' }} />}
+            <label style={{ cursor: hasPending ? 'default' : 'pointer' }}>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600,
+                color: hasPending ? THEME.inkSoft : THEME.pine, border: `1px solid ${hasPending ? THEME.line : THEME.pine}`,
+                borderRadius: 10, padding: '7px 12px',
+              }}>
+                <Camera size={13} /> {preview ? 'Choose a different photo' : 'Propose a new photo'}
+              </span>
+              <input type="file" accept="image/*" disabled={hasPending} style={{ display: 'none' }} onChange={e => handleFile(e.target.files[0])} />
+            </label>
+          </div>
           <Field label="Phone number">
-            <input value={nokPhone} onChange={e => setNokPhone(e.target.value)} style={inputStyle} placeholder="e.g. 07XX XXX XXX" />
+            <input value={phone} onChange={e => setPhone(e.target.value)} disabled={hasPending} style={inputStyle} />
           </Field>
-          <PrimaryButton disabled={busy} onClick={save}>
-            {busy ? <Loader2 size={15} className="spin" /> : saved ? <><Check size={14} /> Saved</> : 'Save'}
+          <Field label="Next of kin — full name">
+            <input value={nokName} onChange={e => setNokName(e.target.value)} disabled={hasPending} style={inputStyle} placeholder="e.g. Jane Doe" />
+          </Field>
+          <Field label="Next of kin — relationship">
+            <input value={nokRel} onChange={e => setNokRel(e.target.value)} disabled={hasPending} style={inputStyle} placeholder="e.g. Spouse, Parent, Sibling" />
+          </Field>
+          <Field label="Next of kin — phone number">
+            <input value={nokPhone} onChange={e => setNokPhone(e.target.value)} disabled={hasPending} style={inputStyle} placeholder="e.g. 07XX XXX XXX" />
+          </Field>
+          {error && <div style={{ color: THEME.danger, fontSize: 12 }}>{error}</div>}
+          <PrimaryButton disabled={busy || hasPending} onClick={submitRequest}>
+            {busy ? <Loader2 size={15} className="spin" /> : 'Submit for approval'}
           </PrimaryButton>
         </div>
       </Card>
+      {!loadingRequests && myRequests.length > 0 && (
+        <Card>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Your change requests</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {myRequests.map(r => (
+              <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '6px 0', borderTop: `1px solid ${THEME.line}` }}>
+                <span>{fmtDate(r.requested_at)}</span>
+                <Badge color={statusColor(r.status === 'approved' ? 'active' : r.status)}>{r.status}</Badge>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
@@ -1016,10 +1170,12 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const [statementRequests, setStatementRequests] = useState([]);
   const [viewCertifiedRequest, setViewCertifiedRequest] = useState(null);
   const [myPhotoUrl, setMyPhotoUrl] = useState(null);
+  const [withdrawalRequests, setWithdrawalRequests] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [sa, sh, ln, tx, da, dv, sr] = await Promise.all([
+    const [sa, sh, ln, tx, da, dv, sr, wr, ann] = await Promise.all([
       sb(`/rest/v1/savings_accounts?member_id=eq.${profile.id}&select=*`, { token }),
       sb(`/rest/v1/shares?member_id=eq.${profile.id}&select=*`, { token }),
       sb(`/rest/v1/loans?member_id=eq.${profile.id}&select=*&order=applied_at.desc`, { token }),
@@ -1027,6 +1183,8 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
       sb(`/rest/v1/dividend_allocations?member_id=eq.${profile.id}&select=*`, { token }),
       sb(`/rest/v1/dividends?select=*`, { token }),
       sb(`/rest/v1/statement_requests?member_id=eq.${profile.id}&select=*&order=requested_at.desc&limit=5`, { token }),
+      sb(`/rest/v1/withdrawal_requests?member_id=eq.${profile.id}&select=*&order=requested_at.desc&limit=10`, { token }),
+      sb(`/rest/v1/announcements?select=*&order=created_at.desc&limit=20`, { token }),
     ]);
     setSavings(sa[0] || { balance: 0 });
     setShares(sh[0] || { balance: 0 });
@@ -1036,11 +1194,26 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
     const m = {}; (dv || []).forEach(d => { m[d.id] = d.year; });
     setDivMap(m);
     setStatementRequests(sr || []);
+    setWithdrawalRequests(wr || []);
+    setAnnouncements(ann || []);
     setLoading(false);
   }, [profile.id, token]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (profile.photo_url) getSignedPhotoUrl(token, profile.photo_url).then(setMyPhotoUrl); }, [profile.photo_url, token]);
+  useEffect(() => {
+    checkAndNotifyAnnouncements(token);
+    const interval = setInterval(() => checkAndNotifyAnnouncements(token), 120000);
+    return () => clearInterval(interval);
+  }, [token]);
+
+  async function requestWithdrawal(amount, note) {
+    await sb('/rest/v1/withdrawal_requests', {
+      method: 'POST', token, headers: { Prefer: 'return=minimal' },
+      body: { member_id: profile.id, amount: Number(amount), note },
+    });
+    await load();
+  }
 
   async function requestStatement() {
     await sb('/rest/v1/statement_requests', { method: 'POST', token, headers: { Prefer: 'return=minimal' }, body: { member_id: profile.id } });
@@ -1050,12 +1223,12 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const activeLoan = loans.find(l => l.status === 'active');
   const pendingLoan = loans.find(l => l.status === 'pending');
 
-  async function applyForLoan(principal, term_months, purpose, overCeiling) {
+  async function applyForLoan(principal, term_months, purpose, overCeiling, repaymentPlan) {
     await sb('/rest/v1/loans', {
       method: 'POST', token,
       body: {
         member_id: profile.id, principal: Number(principal), term_months: Number(term_months),
-        purpose, status: 'pending', flagged_over_ceiling: !!overCeiling,
+        purpose, status: 'pending', flagged_over_ceiling: !!overCeiling, repayment_plan: repaymentPlan || null,
       },
       headers: { Prefer: 'return=minimal' },
     });
@@ -1067,6 +1240,7 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
     { key: 'overview', label: 'Home', icon: Home },
     { key: 'loans', label: 'Loans', icon: Landmark },
     { key: 'activity', label: 'Activity', icon: Wallet },
+    { key: 'messages', label: 'Messages', icon: Megaphone },
     { key: 'profile', label: 'Profile', icon: Users },
   ];
 
@@ -1081,11 +1255,14 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
           <>
             {tab === 'overview' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <NotificationPrompt />
                 <div>
                   <div style={{ fontFamily: 'Fraunces, serif', fontSize: 20, color: THEME.ink }}>Hi, {profile.full_name.split(' ')[0]}</div>
                   <div style={{ fontSize: 13, color: THEME.inkSoft, marginTop: 2 }}>Here's where your savings stand today</div>
                 </div>
-                <BalanceHeroCard savings={savings} shares={shares} />
+                <div onClick={() => setTab('activity')} style={{ cursor: 'pointer' }}>
+                  <BalanceHeroCard savings={savings} shares={shares} />
+                </div>
                 <QuickActions actions={[
                   { label: 'Apply loan', icon: Landmark, onClick: () => setTab('loans') },
                   { label: 'Statement', icon: FileText, onClick: () => setShowStatement(true) },
@@ -1106,18 +1283,24 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                   );
                 })()}
                 <div style={{ display: 'flex', gap: 10 }}>
-                  <StatCard label="Savings" value={fmt(savings.balance)} accent={THEME.pine} icon={PiggyBank} />
-                  <StatCard label="Shares" value={fmt(shares.balance)} accent={THEME.gold} icon={Coins} />
+                  <div onClick={() => setTab('activity')} style={{ flex: 1, cursor: 'pointer' }}>
+                    <StatCard label="Savings" value={fmt(savings.balance)} accent={THEME.pine} icon={PiggyBank} />
+                  </div>
+                  <div onClick={() => setTab('activity')} style={{ flex: 1, cursor: 'pointer' }}>
+                    <StatCard label="Shares" value={fmt(shares.balance)} accent={THEME.gold} icon={Coins} />
+                  </div>
                 </div>
                 {activeLoan && (
-                  <Card>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <span style={{ fontWeight: 700, fontSize: 14 }}>Active loan</span>
-                      <Badge color={statusColor(activeLoan.status)}>{activeLoan.status}</Badge>
-                    </div>
-                    <div style={{ fontFamily: 'Fraunces, serif', fontSize: 20, color: THEME.ink }}>{fmt(activeLoan.outstanding_balance)}</div>
-                    <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 2 }}>outstanding of {fmt(activeLoan.principal)} principal</div>
-                  </Card>
+                  <div onClick={() => setTab('loans')} style={{ cursor: 'pointer' }}>
+                    <Card>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                        <span style={{ fontWeight: 700, fontSize: 14 }}>Active loan</span>
+                        <Badge color={statusColor(activeLoan.status)}>{activeLoan.status}</Badge>
+                      </div>
+                      <div style={{ fontFamily: 'Fraunces, serif', fontSize: 20, color: THEME.ink }}>{fmt(activeLoan.outstanding_balance)}</div>
+                      <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 2 }}>outstanding of {fmt(activeLoan.principal)} principal</div>
+                    </Card>
+                  </div>
                 )}
                 {txns.length > 0 && (
                   <Card>
@@ -1149,6 +1332,7 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                     onSubmit={applyForLoan}
                     onCancel={() => setShowLoanForm(false)}
                     maxCeiling={(Number(savings.balance) + Number(shares.balance)) * LOAN_MULTIPLIER}
+                    savingsBalance={Number(savings.balance)}
                   />
                 )}
                 {loans.length === 0 ? <EmptyState text="No loan applications yet." /> : loans.map(l => (
@@ -1206,6 +1390,7 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                     </div>
                   )}
                 </Card>
+                <WithdrawalRequestCard savings={savings} withdrawalRequests={withdrawalRequests} onRequest={requestWithdrawal} />
                 <Card>
                   <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
                     <Gift size={15} color={THEME.gold} /> Dividends
@@ -1217,6 +1402,22 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                     </div>
                   ))}
                 </Card>
+              </div>
+            )}
+
+            {tab === 'messages' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <NotificationPrompt />
+                {announcements.length === 0 ? <EmptyState text="No messages from the SACCO yet." /> : announcements.map(a => (
+                  <Card key={a.id}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <Megaphone size={15} color={THEME.pine} />
+                      <span style={{ fontWeight: 700, fontSize: 14 }}>{a.title}</span>
+                    </div>
+                    <p style={{ fontSize: 13, color: THEME.ink, margin: 0, lineHeight: 1.5 }}>{a.body}</p>
+                    <div style={{ fontSize: 11, color: THEME.inkSoft, marginTop: 8 }}>{fmtDateTime(a.created_at)}</div>
+                  </Card>
+                ))}
               </div>
             )}
 
@@ -1277,12 +1478,15 @@ function TxnRow({ t, expandable = true }) {
   );
 }
 
-function LoanApplyForm({ onSubmit, onCancel, maxCeiling = 0 }) {
+function LoanApplyForm({ onSubmit, onCancel, maxCeiling = 0, savingsBalance = 0 }) {
   const [principal, setPrincipal] = useState('');
   const [term, setTerm] = useState('12');
   const [purpose, setPurpose] = useState('');
+  const [repaymentPlan, setRepaymentPlan] = useState('');
   const [busy, setBusy] = useState(false);
   const overCeiling = Number(principal) > maxCeiling && maxCeiling > 0;
+  const isSpecial = Number(principal) > 2 * savingsBalance && Number(principal) > 0;
+  const canSubmit = principal && (!isSpecial || repaymentPlan.trim().length > 0);
   return (
     <Card>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1295,13 +1499,24 @@ function LoanApplyForm({ onSubmit, onCancel, maxCeiling = 0 }) {
             This exceeds your automated ceiling. You can still submit — it will be flagged for manual review.
           </div>
         )}
+        {isSpecial && (
+          <div style={{ fontSize: 12, color: THEME.gold, background: THEME.gold + '14', border: `1px solid ${THEME.gold}55`, borderRadius: 8, padding: '8px 10px' }}>
+            This is more than 2× your savings — that makes it a <b>special loan request</b>. Describe your repayment
+            plan below; a manager will review it specifically because of the higher risk.
+          </div>
+        )}
         <Field label="Term (months)"><input type="number" min="1" required value={term} onChange={e => setTerm(e.target.value)} style={inputStyle} /></Field>
         <Field label="Purpose"><input value={purpose} onChange={e => setPurpose(e.target.value)} style={inputStyle} placeholder="e.g. School fees" /></Field>
+        {isSpecial && (
+          <Field label="Repayment plan (required for special loans)">
+            <textarea value={repaymentPlan} onChange={e => setRepaymentPlan(e.target.value)} style={{ ...inputStyle, minHeight: 80, resize: 'vertical' }}
+              placeholder="e.g. I will repay 200,000 UGX monthly from my business income, starting next month" />
+          </Field>
+        )}
         <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-          <PrimaryButton style={{ flex: 1 }} disabled={busy} onClick={async () => {
-            if (!principal) return;
+          <PrimaryButton style={{ flex: 1 }} disabled={busy || !canSubmit} onClick={async () => {
             setBusy(true);
-            try { await onSubmit(principal, term, purpose, overCeiling); } finally { setBusy(false); }
+            try { await onSubmit(principal, term, purpose, overCeiling || isSpecial, isSpecial ? repaymentPlan.trim() : ''); } finally { setBusy(false); }
           }}>{busy ? <Loader2 size={15} className="spin" /> : 'Submit application'}</PrimaryButton>
           <GhostButton onClick={onCancel}>Cancel</GhostButton>
         </div>
@@ -1383,7 +1598,7 @@ function DesktopSidebar({ tabs, active, onChange, profile, avatarUrl, themeMode,
 
 function DesktopOverview({
   profile, totalSavings, totalShares, totalOutstanding, chartData, cashFlowData, statsPeriod, setStatsPeriod,
-  txnsAll, profileMap, profiles, memberPhotoUrls, pendingMembers, pendingLoans,
+  txnsAll, profileMap, profiles, memberPhotoUrls, pendingMembers, pendingLoans, setTab,
 }) {
   const dailyActivity = useMemo(() => {
     const days = [];
@@ -1410,9 +1625,9 @@ function DesktopOverview({
         <div>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>My cards</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <div style={{
+            <div onClick={() => setTab('transactions')} style={{
               background: `linear-gradient(135deg, ${THEME.pine}, ${THEME.pineDark})`, borderRadius: 16, padding: 18, color: '#fff', minHeight: 130,
-              display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+              display: 'flex', flexDirection: 'column', justifyContent: 'space-between', cursor: 'pointer',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ fontSize: 12, fontWeight: 700 }}>AMANI SACCO</span>
@@ -1423,9 +1638,9 @@ function DesktopOverview({
                 <div style={{ fontFamily: 'Fraunces, serif', fontSize: 22, marginTop: 2 }}>{fmt(totalSavings)}</div>
               </div>
             </div>
-            <div style={{
+            <div onClick={() => setTab('transactions')} style={{
               background: `linear-gradient(135deg, ${THEME.gold}, #8a5a00)`, borderRadius: 16, padding: 18, color: '#fff', minHeight: 130,
-              display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+              display: 'flex', flexDirection: 'column', justifyContent: 'space-between', cursor: 'pointer',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span style={{ fontSize: 12, fontWeight: 700 }}>AMANI SACCO</span>
@@ -1538,10 +1753,13 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const [txnsAll, setTxnsAll] = useState([]);
   const [dividendsAll, setDividendsAll] = useState([]);
   const [statementRequestsAll, setStatementRequestsAll] = useState([]);
+  const [withdrawalRequestsAll, setWithdrawalRequestsAll] = useState([]);
+  const [profileChangeRequestsAll, setProfileChangeRequestsAll] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [pf, sa, sh, ln, tx, dv, sr] = await Promise.all([
+    const [pf, sa, sh, ln, tx, dv, sr, wr, pcr, ann] = await Promise.all([
       sb('/rest/v1/profiles?select=*&order=created_at.desc', { token }),
       sb('/rest/v1/savings_accounts?select=*', { token }),
       sb('/rest/v1/shares?select=*', { token }),
@@ -1549,15 +1767,26 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
       sb('/rest/v1/transactions?select=*&order=created_at.desc&limit=60', { token }),
       sb('/rest/v1/dividends?select=*&order=year.desc', { token }),
       sb('/rest/v1/statement_requests?status=eq.pending&select=*&order=requested_at.asc', { token }),
+      sb('/rest/v1/withdrawal_requests?status=eq.pending&select=*&order=requested_at.asc', { token }),
+      sb('/rest/v1/profile_change_requests?status=eq.pending&select=*&order=requested_at.asc', { token }),
+      sb('/rest/v1/announcements?select=*&order=created_at.desc&limit=20', { token }),
     ]);
     setProfiles(pf || []); setSavingsAll(sa || []); setSharesAll(sh || []);
     setLoansAll(ln || []); setTxnsAll(tx || []); setDividendsAll(dv || []);
     setStatementRequestsAll(sr || []);
+    setWithdrawalRequestsAll(wr || []);
+    setProfileChangeRequestsAll(pcr || []);
+    setAnnouncements(ann || []);
     setLoading(false);
   }, [token]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (profile.photo_url) getSignedPhotoUrl(token, profile.photo_url).then(setMyPhotoUrl); }, [profile.photo_url, token]);
+  useEffect(() => {
+    checkAndNotifyAnnouncements(token);
+    const interval = setInterval(() => checkAndNotifyAnnouncements(token), 120000);
+    return () => clearInterval(interval);
+  }, [token]);
   useEffect(() => {
     if (tab !== 'members') return;
     const withPhotos = profiles.filter(p => p.photo_url && !(p.id in memberPhotoUrls));
@@ -1573,6 +1802,58 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
     await sb(`/rest/v1/statement_requests?id=eq.${req.id}`, {
       method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
       body: { status, decided_at: new Date().toISOString(), decided_by: profile.id },
+    });
+    await load();
+  }
+
+  async function decideWithdrawalRequest(req, status) {
+    if (status === 'approved') {
+      const acct = savingsMap[req.member_id] || { balance: 0 };
+      const newBal = Number(acct.balance) - Number(req.amount);
+      await sb(`/rest/v1/savings_accounts?member_id=eq.${req.member_id}`, {
+        method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
+        body: { balance: newBal, updated_at: new Date().toISOString() },
+      });
+      await sb('/rest/v1/transactions', {
+        method: 'POST', token, headers: { Prefer: 'return=minimal' },
+        body: {
+          member_id: req.member_id, type: 'withdrawal', amount: Number(req.amount), balance_after: newBal,
+          payment_mode: 'other', notes: req.note ? `Withdrawal request: ${req.note}` : 'Approved withdrawal request', created_by: profile.id,
+        },
+      });
+    }
+    await sb(`/rest/v1/withdrawal_requests?id=eq.${req.id}`, {
+      method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
+      body: { status, decided_at: new Date().toISOString(), decided_by: profile.id },
+    });
+    await load();
+  }
+
+  async function decideProfileChangeRequest(req, status) {
+    if (status === 'approved') {
+      const patch = {};
+      if (req.new_phone) patch.phone = req.new_phone;
+      if (req.new_photo_url) patch.photo_url = req.new_photo_url;
+      if (req.new_next_of_kin_name) patch.next_of_kin_name = req.new_next_of_kin_name;
+      if (req.new_next_of_kin_phone) patch.next_of_kin_phone = req.new_next_of_kin_phone;
+      if (req.new_next_of_kin_relationship) patch.next_of_kin_relationship = req.new_next_of_kin_relationship;
+      if (Object.keys(patch).length > 0) {
+        await sb(`/rest/v1/profiles?id=eq.${req.member_id}`, {
+          method: 'PATCH', token, headers: { Prefer: 'return=minimal' }, body: patch,
+        });
+      }
+    }
+    await sb(`/rest/v1/profile_change_requests?id=eq.${req.id}`, {
+      method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
+      body: { status, decided_at: new Date().toISOString(), decided_by: profile.id },
+    });
+    await load();
+  }
+
+  async function postAnnouncement(title, body) {
+    await sb('/rest/v1/announcements', {
+      method: 'POST', token, headers: { Prefer: 'return=minimal' },
+      body: { title, body, created_by: profile.id },
     });
     await load();
   }
@@ -1759,6 +2040,7 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
     ...(perms.viewLoans ? [{ key: 'loans', label: 'Loans', icon: Landmark }] : []),
     ...(perms.viewCash ? [{ key: 'transactions', label: 'Finances', icon: Wallet }] : []),
     ...(perms.viewDividends ? [{ key: 'dividends', label: 'Dividends', icon: Gift }] : []),
+    { key: 'messages', label: 'Messages', icon: Megaphone },
   ];
   useEffect(() => {
     if (!tabs.some(t => t.key === tab)) setTab('overview');
@@ -1769,6 +2051,7 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
       <>
         {tab === 'overview' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <NotificationPrompt />
                 <SaccoCard totalAssets={totalSavings + totalShares} />
 
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -1847,6 +2130,34 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                       </GhostButton>
                     </div>
                   </Card>
+                )}
+                {perms.approveAccounts && profileChangeRequestsAll.length > 0 && (
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: THEME.pine }}>
+                      Profile change requests ({profileChangeRequestsAll.length})
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {profileChangeRequestsAll.map(r => (
+                        <Card key={r.id}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <div style={{ fontWeight: 700, fontSize: 14 }}>{(profileMap[r.member_id] || {}).full_name || 'Member'}</div>
+                            <span style={{ fontSize: 12, color: THEME.inkSoft }}>{fmtDate(r.requested_at)}</span>
+                          </div>
+                          <div style={{ fontSize: 12, color: THEME.ink, marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                            {r.new_photo_url && <span>• Proposes a new profile photo</span>}
+                            {r.new_phone && <span>• New phone: <b>{r.new_phone}</b></span>}
+                            {r.new_next_of_kin_name && <span>• Next of kin name: <b>{r.new_next_of_kin_name}</b></span>}
+                            {r.new_next_of_kin_relationship && <span>• Next of kin relationship: <b>{r.new_next_of_kin_relationship}</b></span>}
+                            {r.new_next_of_kin_phone && <span>• Next of kin phone: <b>{r.new_next_of_kin_phone}</b></span>}
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                            <PrimaryButton style={{ flex: 1 }} onClick={() => decideProfileChangeRequest(r, 'approved')}><Check size={14} /> Approve</PrimaryButton>
+                            <GhostButton style={{ flex: 1, borderColor: THEME.danger, color: THEME.danger }} onClick={() => decideProfileChangeRequest(r, 'rejected')}><X size={14} style={{ marginRight: 4 }} />Reject</GhostButton>
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
                 )}
                 {perms.approveAccounts && statementRequestsAll.length > 0 && (
                   <div>
@@ -1962,10 +2273,15 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                         <Card key={l.id}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                             <div style={{ fontWeight: 700 }}>{(profileMap[l.member_id] || {}).full_name || 'Member'}</div>
-                            {l.flagged_over_ceiling && <Badge color={THEME.danger}>over ceiling</Badge>}
+                            {l.repayment_plan ? <Badge color={THEME.gold}>special request</Badge> : l.flagged_over_ceiling && <Badge color={THEME.danger}>over ceiling</Badge>}
                           </div>
                           <div style={{ fontFamily: 'Fraunces, serif', fontSize: 18, marginTop: 4 }}>{fmt(l.principal)}</div>
                           <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 2 }}>{l.term_months} months{l.purpose ? ` · ${l.purpose}` : ''}</div>
+                          {l.repayment_plan && (
+                            <div style={{ fontSize: 12, color: THEME.ink, background: THEME.paper, borderRadius: 8, padding: '8px 10px', marginTop: 8 }}>
+                              <b>Repayment plan:</b> {l.repayment_plan}
+                            </div>
+                          )}
                           <GhostButton style={{ marginTop: 10, width: '100%' }} onClick={() => setViewMemberId(l.member_id)}>
                             View applicant's full profile
                           </GhostButton>
@@ -1996,6 +2312,26 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
             {tab === 'transactions' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 {perms.recordCash && <RecordTxnForm members={profiles} onSubmit={recordTxn} />}
+                {perms.recordCash && withdrawalRequestsAll.length > 0 && (
+                  <Card>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Withdrawal requests ({withdrawalRequestsAll.length})</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {withdrawalRequestsAll.map(r => (
+                        <div key={r.id} style={{ border: `1px solid ${THEME.line}`, borderRadius: 10, padding: 10 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ fontWeight: 700, fontSize: 13 }}>{(profileMap[r.member_id] || {}).full_name || 'Member'}</span>
+                            <b style={{ fontSize: 13 }}>{fmt(r.amount)}</b>
+                          </div>
+                          {r.note && <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 3 }}>{r.note}</div>}
+                          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                            <PrimaryButton style={{ flex: 1, padding: '7px 0', fontSize: 12 }} onClick={() => decideWithdrawalRequest(r, 'approved')}><Check size={13} /> Approve</PrimaryButton>
+                            <GhostButton style={{ flex: 1, padding: '7px 0', fontSize: 12, borderColor: THEME.danger, color: THEME.danger }} onClick={() => decideWithdrawalRequest(r, 'rejected')}><X size={13} style={{ marginRight: 4 }} />Reject</GhostButton>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
                 <Card>
                   <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Recent transactions</div>
                   {txnsAll.length === 0 ? <EmptyState text="No transactions recorded yet." /> : txnsAll.slice(0, 20).map(t => (
@@ -2030,6 +2366,22 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                 </Card>
               </div>
             )}
+
+            {tab === 'messages' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {profile.role === 'manager' && <PostAnnouncementForm onSubmit={postAnnouncement} />}
+                {announcements.length === 0 ? <EmptyState text="No messages sent yet." /> : announcements.map(a => (
+                  <Card key={a.id}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <Megaphone size={15} color={THEME.pine} />
+                      <span style={{ fontWeight: 700, fontSize: 14 }}>{a.title}</span>
+                    </div>
+                    <p style={{ fontSize: 13, color: THEME.ink, margin: 0, lineHeight: 1.5 }}>{a.body}</p>
+                    <div style={{ fontSize: 11, color: THEME.inkSoft, marginTop: 8 }}>{fmtDateTime(a.created_at)}</div>
+                  </Card>
+                ))}
+              </div>
+            )}
       </>
     )
   );
@@ -2051,7 +2403,7 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                 profile={profile} totalSavings={totalSavings} totalShares={totalShares} totalOutstanding={totalOutstanding}
                 chartData={chartData} cashFlowData={cashFlowData} trendData={trendData} statsPeriod={statsPeriod} setStatsPeriod={setStatsPeriod}
                 txnsAll={txnsAll} profileMap={profileMap} profiles={profiles} memberPhotoUrls={memberPhotoUrls}
-                pendingMembers={pendingMembers} pendingLoans={pendingLoans}
+                pendingMembers={pendingMembers} pendingLoans={pendingLoans} setTab={setTab}
               />
             ) : (
               <div style={{ maxWidth: 900 }}>{tabContent}</div>
@@ -2158,6 +2510,27 @@ function RecordTxnForm({ members, onSubmit }) {
           setBusy(true);
           try { await onSubmit(memberId, type, amount, paymentMode, notes, date); setAmount(''); setNotes(''); } finally { setBusy(false); }
         }}>{busy ? <Loader2 size={15} className="spin" /> : isAdjustment ? 'Set opening balance' : 'Record transaction'}</PrimaryButton>
+      </div>
+    </Card>
+  );
+}
+
+function PostAnnouncementForm({ onSubmit }) {
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+  return (
+    <Card>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Send a message to all members</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <Field label="Title"><input value={title} onChange={e => setTitle(e.target.value)} style={inputStyle} placeholder="e.g. Office closed this Friday" /></Field>
+        <Field label="Message">
+          <textarea value={body} onChange={e => setBody(e.target.value)} style={{ ...inputStyle, minHeight: 90, resize: 'vertical' }} placeholder="Write the full message here…" />
+        </Field>
+        <PrimaryButton disabled={busy || !title.trim() || !body.trim()} onClick={async () => {
+          setBusy(true);
+          try { await onSubmit(title.trim(), body.trim()); setTitle(''); setBody(''); } finally { setBusy(false); }
+        }}>{busy ? <Loader2 size={15} className="spin" /> : 'Send to all members'}</PrimaryButton>
       </div>
     </Card>
   );

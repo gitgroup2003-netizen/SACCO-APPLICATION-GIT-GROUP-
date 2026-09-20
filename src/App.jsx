@@ -333,17 +333,19 @@ function Header({ title, subtitle, onLogout, roleBadge, avatarUrl, avatarName, t
   );
 }
 function BottomNav({ tabs, active, onChange }) {
+  const tight = tabs.length > 5;
   return (
-    <div style={{
+    <div className="bottom-nav-scroll" style={{
       position: 'sticky', bottom: 0, background: THEME.surface, borderTop: `1px solid ${THEME.line}`,
-      display: 'flex', padding: '8px 8px calc(8px + env(safe-area-inset-bottom))',
-      boxShadow: '0 -2px 10px rgba(15,61,58,0.05)',
+      display: 'flex', overflowX: tight ? 'auto' : 'visible', padding: '8px 8px calc(8px + env(safe-area-inset-bottom))',
+      boxShadow: '0 -2px 10px rgba(15,61,58,0.05)', WebkitOverflowScrolling: 'touch',
     }}>
       {tabs.map(t => (
         <button key={t.key} onClick={() => onChange(t.key)} style={{
-          flex: 1, background: active === t.key ? THEME.pine + '12' : 'none', border: 'none', cursor: 'pointer',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '7px 0', borderRadius: 10,
-          color: active === t.key ? THEME.pine : THEME.inkSoft, transition: 'background 0.15s',
+          flex: tight ? '0 0 auto' : 1, minWidth: tight ? 68 : 0,
+          background: active === t.key ? THEME.pine + '12' : 'none', border: 'none', cursor: 'pointer',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, padding: '7px 6px', borderRadius: 10,
+          color: active === t.key ? THEME.pine : THEME.inkSoft, transition: 'background 0.15s', whiteSpace: 'nowrap',
         }}>
           <t.icon size={19} />
           <span style={{ fontSize: 11, fontWeight: 600 }}>{t.label}</span>
@@ -2139,9 +2141,9 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                       {profileChangeRequestsAll.map(r => (
                         <Card key={r.id}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <div style={{ fontWeight: 700, fontSize: 14 }}>{(profileMap[r.member_id] || {}).full_name || 'Member'}</div>
-                            <span style={{ fontSize: 12, color: THEME.inkSoft }}>{fmtDate(r.requested_at)}</span>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                            <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{(profileMap[r.member_id] || {}).full_name || 'Member'}</div>
+                            <span style={{ fontSize: 12, color: THEME.inkSoft, flexShrink: 0 }}>{fmtDate(r.requested_at)}</span>
                           </div>
                           <div style={{ fontSize: 12, color: THEME.ink, marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
                             {r.new_photo_url && <span>• Proposes a new profile photo</span>}
@@ -2167,9 +2169,9 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                       {statementRequestsAll.map(r => (
                         <Card key={r.id}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <div style={{ fontWeight: 700, fontSize: 14 }}>{(profileMap[r.member_id] || {}).full_name || 'Member'}</div>
-                            <span style={{ fontSize: 12, color: THEME.inkSoft }}>{fmtDate(r.requested_at)}</span>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                            <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{(profileMap[r.member_id] || {}).full_name || 'Member'}</div>
+                            <span style={{ fontSize: 12, color: THEME.inkSoft, flexShrink: 0 }}>{fmtDate(r.requested_at)}</span>
                           </div>
                           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                             <PrimaryButton style={{ flex: 1 }} onClick={() => decideStatementRequest(r, 'approved')}><Check size={14} /> Approve</PrimaryButton>
@@ -2318,9 +2320,9 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                       {withdrawalRequestsAll.map(r => (
                         <div key={r.id} style={{ border: `1px solid ${THEME.line}`, borderRadius: 10, padding: 10 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                            <span style={{ fontWeight: 700, fontSize: 13 }}>{(profileMap[r.member_id] || {}).full_name || 'Member'}</span>
-                            <b style={{ fontSize: 13 }}>{fmt(r.amount)}</b>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                            <span style={{ fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{(profileMap[r.member_id] || {}).full_name || 'Member'}</span>
+                            <b style={{ fontSize: 13, flexShrink: 0 }}>{fmt(r.amount)}</b>
                           </div>
                           {r.note && <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 3 }}>{r.note}</div>}
                           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
@@ -2811,6 +2813,10 @@ export default function App() {
         .spin { animation: spin 1s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
         input:focus, select:focus { border-color: ${THEME.pine} !important; }
+        .bottom-nav-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+        .bottom-nav-scroll::-webkit-scrollbar { display: none; }
+        button { min-height: 34px; }
+        textarea { font-family: inherit; }
       `}</style>
       {!session || !profile ? (
         <AuthScreen onAuthed={(sess, prof) => { setSession(sess); setProfile(prof); }} themeMode={themeMode} onToggleTheme={toggleTheme} />

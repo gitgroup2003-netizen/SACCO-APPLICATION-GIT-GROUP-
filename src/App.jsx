@@ -1550,7 +1550,7 @@ function DesktopSidebar({ tabs, active, onChange, profile, avatarUrl, themeMode,
   return (
     <div style={{
       width: 240, flexShrink: 0, background: THEME.surface, borderRight: `1px solid ${THEME.line}`,
-      display: 'flex', flexDirection: 'column', padding: '24px 16px', height: '100vh', position: 'sticky', top: 0,
+      display: 'flex', flexDirection: 'column', padding: '24px 16px', height: '100%', overflowY: 'auto',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 8px', marginBottom: 30 }}>
         <div style={{
@@ -2390,12 +2390,12 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
 
   if (isDesktop) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', background: THEME.paper }}>
+      <div style={{ height: '100vh', display: 'flex', background: THEME.paper, overflow: 'hidden' }}>
         <DesktopSidebar
           tabs={tabs} active={tab} onChange={setTab} profile={profile} avatarUrl={myPhotoUrl}
           themeMode={themeMode} onToggleTheme={onToggleTheme} onLogout={onLogout}
         />
-        <div style={{ flex: 1, padding: '28px 36px', overflowY: 'auto', minWidth: 0 }}>
+        <div style={{ flex: 1, padding: '28px 36px', overflowY: 'auto', minWidth: 0, height: '100%' }}>
           <div style={{ fontFamily: 'Fraunces, serif', fontSize: 24, color: THEME.ink, marginBottom: 22 }}>
             {tabs.find(t => t.key === tab)?.label || 'Overview'}
           </div>

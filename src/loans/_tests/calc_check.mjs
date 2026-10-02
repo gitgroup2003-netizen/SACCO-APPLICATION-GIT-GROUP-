@@ -1,0 +1,31 @@
+import { PGlite } from '@electric-sql/pglite';
+import { makeDb, migrate, as } from './harness.mjs';
+import { buildSchedule } from '/home/claude/work/src/loans/kit.js';
+const db = await makeDb();
+await migrate(db, ['01_loan_foundation.sql','02_loan_engine.sql','03_loan_hardening.sql']);
+const M='00000000-0000-0000-0000-000000000001', A='00000000-0000-0000-0000-00000000000a';
+await db.query(`insert into auth.users (id,email) values ($1,'m@t.com'),($2,'a@t.com')`, [M, A]);
+await db.exec(`update public.profiles set status='active'; update public.savings_accounts set balance=900000000 where member_id='${M}'; update public.savings_accounts set balance=900000000 where member_id='${A}'`);
+const cases = [ [1000000,6,10,'reducing'], [2750000,12,18,'reducing'], [333333,7,12,'flat'], [5000000,24,15,'reducing'], [100000,1,10,'flat'], [850000,18,0,'reducing'], [1234567,11,21.5,'reducing'], [9999999,36,24,'flat'] ];
+let bad = 0;
+for (const [amt, n, rate, method] of cases) {
+  const pid = (await db.query(`insert into public.loan_products (name, interest_rate, interest_method, max_term_months, savings_multiple, max_amount) values ('t', $1, $2, 60, 99, null) returning id`, [rate, method])).rows[0].id;
+  await db.exec(`set app.loan_engine='1'`);
+  const id = (await as(db, A, `select public.apply_for_loan($1,$2,$3,'x','plan') as id`, [pid, amt, n])).rows[0].id;
+  await as(db, M, `select public.set_loan_stage('${id}','appraisal')`);
+  await as(db, M, `select public.set_loan_stage('${id}','approved')`);
+  const first = new Date(); first.setDate(first.getDate() + 20);
+  const fd = first.toISOString().slice(0, 10);
+  await as(db, M, `select public.disburse_loan('${id}', '${fd}')`);
+  const dbRows = (await db.query(`select principal_due::float p, interest_due::float i, due_date::text d from public.loan_schedule where loan_id=$1 order by installment_no`, [id])).rows;
+  const js = buildSchedule({ amount: amt, months: n, ratePct: rate, method, firstDue: fd + 'T12:00:00' });
+  const same = js.length === dbRows.length && js.every((r, k) => r.principal === dbRows[k].p && r.interest === dbRows[k].i);
+  const dates = js.every((r, k) => r.due.toISOString ? true : true);
+  const d0 = js[0].due, dd = `${d0.getFullYear()}-${String(d0.getMonth()+1).padStart(2,'0')}-${String(d0.getDate()).padStart(2,'0')}`;
+  const dlast = js[js.length-1].due, ddl = `${dlast.getFullYear()}-${String(dlast.getMonth()+1).padStart(2,'0')}-${String(dlast.getDate()).padStart(2,'0')}`;
+  const dateOk = dd === dbRows[0].d && ddl === dbRows[dbRows.length-1].d;
+  if (!same || !dateOk) bad++;
+  console.log(same && dateOk ? '✓' : '✗', `${amt} / ${n}m / ${rate}% / ${method}`, same ? '' : 'MISMATCH', dateOk ? '' : `dates js ${dd}..${ddl} vs db ${dbRows[0].d}..${dbRows[dbRows.length-1].d}`);
+  await db.exec(`update public.loans set stage='closed', status='completed', outstanding_balance=0 where id='${id}'`);
+}
+console.log(bad ? `${bad} mismatches` : 'JS quote matches the database on every case');

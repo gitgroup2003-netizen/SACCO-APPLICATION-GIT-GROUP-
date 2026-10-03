@@ -1593,6 +1593,77 @@ function DesktopOverview({
   );
 }
 
+/* ------------------------------- admin app ------------------------------- */
+
+const ROLE_LABELS = {
+  manager: 'Manager', cashier: 'Cashier', loans_officer: 'Loans officer',
+  supervisor: 'Supervisor', board: 'Board', member: 'Member',
+};
+function getPerms(role) {
+  return {
+    manageRoles: role === 'manager',
+    approveAccounts: role === 'manager',
+    recordCash: role === 'manager' || role === 'cashier',
+    viewCash: role === 'manager' || role === 'cashier' || role === 'supervisor',
+    manageLoans: role === 'manager' || role === 'loans_officer',
+    viewLoans: role === 'manager' || role === 'loans_officer' || role === 'supervisor',
+    declareDividends: role === 'manager',
+    viewDividends: role === 'manager' || role === 'board' || role === 'supervisor',
+  };
+}
+
+function DesktopSidebar({ tabs, active, onChange, profile, avatarUrl, themeMode, onToggleTheme, onLogout }) {
+  return (
+    <div style={{
+      width: 240, flexShrink: 0, background: THEME.surface, borderRight: `1px solid ${THEME.line}`,
+      display: 'flex', flexDirection: 'column', padding: '24px 16px', height: '100%', overflowY: 'auto',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 8px', marginBottom: 30 }}>
+        <div style={{
+          width: 36, height: 36, borderRadius: 10, background: `linear-gradient(135deg, ${THEME.pine}, ${THEME.pineDark})`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <ShieldCheck size={18} color={THEME.goldLight} />
+        </div>
+        <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, color: THEME.ink }}>Amani SACCO</div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1 }}>
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => onChange(t.key)} style={{
+            display: 'flex', alignItems: 'center', gap: 11, padding: '11px 12px', borderRadius: 10, border: 'none',
+            cursor: 'pointer', textAlign: 'left', fontSize: 14, fontWeight: 600,
+            background: active === t.key ? THEME.pine : 'transparent',
+            color: active === t.key ? '#fff' : THEME.inkSoft,
+          }}>
+            <t.icon size={17} />
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <button onClick={onToggleTheme} style={{
+        display: 'flex', alignItems: 'center', gap: 11, padding: '11px 12px', borderRadius: 10, border: 'none',
+        cursor: 'pointer', textAlign: 'left', fontSize: 14, fontWeight: 600, background: 'transparent', color: THEME.inkSoft, marginBottom: 4,
+      }}>
+        {themeMode === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+        {themeMode === 'dark' ? 'Light mode' : 'Dark mode'}
+      </button>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 12, background: THEME.paper, marginTop: 8 }}>
+        <Avatar name={profile.full_name} photoUrl={avatarUrl} size={36} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{profile.full_name}</div>
+          <div style={{ fontSize: 11, color: THEME.inkSoft }}>{ROLE_LABELS[profile.role] || profile.role}</div>
+        </div>
+        <button onClick={onLogout} title="Sign out" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}>
+          <LogOut size={15} color={THEME.inkSoft} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const perms = getPerms(profile.role);
   const isDesktop = useIsDesktop();

@@ -1,85 +1,54 @@
 # Amani SACCO
 
-A savings, shares, and loans management app for a SACCO (savings and credit
-co-operative), built with React + Vite and backed by Supabase.
+A savings, shares and loans management app for a SACCO, built with React + Vite on Supabase.
 
-Members can view savings/share balances, apply for loans, and track their
-transaction history. Admins can manage members, approve/reject loans, record
-deposits/withdrawals/share purchases, and declare year-end dividends.
+Members see their savings, shares, loans and statements. Staff (manager, cashier, loans officer,
+supervisor, board) record transactions, run the loan desk, approve members and declare dividends.
 
-## 1. Set up Supabase
+**Before going live read [`docs/GO_LIVE.md`](./docs/GO_LIVE.md).** It has the exact order of steps.
 
-1. Create a free project at [supabase.com](https://supabase.com).
-2. In the Supabase dashboard, open **SQL Editor**, paste in the contents of
-   [`supabase/schema.sql`](./supabase/schema.sql), and run it. This creates
-   all tables, the signup trigger, and Row Level Security policies.
-3. Go to **Settings → API** and copy your **Project URL** and **anon public**
-   key.
-4. Copy `.env.example` to `.env` and paste those two values in:
+## How money is protected
 
-   ```
-   VITE_SUPABASE_URL=https://your-project.supabase.co
-   VITE_SUPABASE_ANON_KEY=your-anon-public-key
-   ```
+| Rule | Where it is enforced |
+|---|---|
+| A balance and its ledger entry change together or not at all | Database functions (`supabase/migrations/04`) |
+| Two cashiers working at once cannot overwrite each other | Row locks inside those functions |
+| No overdrafts, no zero/negative/NaN amounts, no future dates | Database functions |
+| The browser cannot write balances or the ledger directly | Triggers (`05`) |
+| Ledger rows cannot be edited or deleted from the app | Triggers (`05`) |
+| Only a manager can change roles or approve/suspend accounts; nobody changes their own role | Trigger (`05`) |
+| Deposits/withdrawals at or above the approval limit entered by a cashier wait for a manager | `pending_transactions` (`04`) |
+| Mobile money / bank / cheque references must be entered and can never be used twice | `payment_references` (`04`) |
+| Every change to money tables is written to `audit_log` | Triggers (`05`) |
+| The service worker never caches API data | `public/sw.js` |
 
-> The first person who signs up in the app automatically becomes an
-> **admin**. Everyone who signs up after that is a regular **member**. You
-> can promote/demote later, from the SQL editor:
-> ```sql
-> update public.profiles set role = 'admin' where id = '<user-uuid>';
-> ```
+## Project layout
 
-## 2. Run locally
+```
+.github/workflows/ci.yml   checks on every push: undefined names, build, database tests
+.eslintrc.ci.json          the undefined-name check
+docs/GO_LIVE.md            go-live runbook, backups, monitoring, rollback
+public/                    PWA files (sw.js, manifest, icons)
+src/App.jsx                auth, member app, admin app
+src/loans/                 loan screens (member + admin), PDF statements, shared UI
+supabase/migrations/       04_ledger_integrity.sql, 05_security_hardening.sql
+supabase/tests/            database tests (npm i --no-save @electric-sql/pglite && node supabase/tests/ledger.test.mjs)
+supabase/verify_security.sql   run in Supabase after the migrations; every row should say OK
+```
+
+The base schema and loan migrations 01-03 live in your Supabase project; see `supabase/README.md`
+for how to export them into this repo so the database can be rebuilt from scratch.
+
+## Run locally
 
 ```bash
+cp .env.example .env     # fill in a TEST Supabase project, not the live one
 npm install
 npm run dev
 ```
 
-Open the printed local URL, sign up, and you're in.
+## What is not included (by design, needs outside accounts)
 
-## 3. Deploy
-
-This is a static Vite build, so it deploys anywhere that serves static
-files. Two easy options:
-
-**Vercel**
-1. Push this repo to GitHub.
-2. Import it at [vercel.com/new](https://vercel.com/new).
-3. Add the two `VITE_SUPABASE_*` environment variables in the project
-   settings.
-4. Deploy — Vercel auto-detects the Vite build.
-
-**Netlify**
-1. Push this repo to GitHub.
-2. Import it at [app.netlify.com](https://app.netlify.com).
-3. Build command: `npm run build`, publish directory: `dist`.
-4. Add the two `VITE_SUPABASE_*` environment variables in site settings.
-
-## Project structure
-
-```
-amani-sacco/
-├── index.html
-├── package.json
-├── vite.config.js
-├── .env.example          # copy to .env with your Supabase credentials
-├── supabase/
-│   └── schema.sql        # run once in the Supabase SQL editor
-└── src/
-    ├── main.jsx           # React entry point
-    └── App.jsx            # the whole app (auth, member view, admin view)
-```
-
-## Scope note
-
-This covers member/admin accounts, savings, shares, loans with an automated
-loan-ceiling rule (savings + shares × 3), repayments, a unified transaction
-ledger, and dividend declarations — all backed by Supabase with Row Level
-Security.
-
-It does **not** yet include mobile money (M-Pesa/MTN/Airtel) webhooks, a
-USSD gateway, payroll CSV ingestion, guarantor fund-locking, government KYC
-lookups, an immutable audit log, or a maker-checker approval workflow —
-those need real third-party credentials/infrastructure and are best added
-as Supabase Edge Functions once you have them.
+- Automatic mobile money collection (MTN MoMo / Airtel Money API). Today staff record the payment and
+  enter the transaction ID; the system refuses duplicates. See `docs/GO_LIVE.md`, "Mobile money".
+- USSD, payroll file import, government KYC lookups.

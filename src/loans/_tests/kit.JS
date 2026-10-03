@@ -2,7 +2,7 @@
 // theme + helpers, the stage model, and the repayment maths (which mirrors
 // the database function exactly so the quote a member sees is the schedule
 // they get).
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 
 export const KitContext = createContext(null);
 export function useKit() {
@@ -114,20 +114,73 @@ export function paidPct(l) {
   return Math.max(0, Math.min(100, Math.round((1 - Number(l.outstanding_balance) / base) * 100)));
 }
 
-// Tiny loader hook: keeps the previous data on screen while reloading, so
-// refreshing after an action never flashes a spinner over the page.
-export function useLoader(fn, deps) {
+/* ------------------------------ background sync ------------------------ */
+// How often every screen quietly re-checks for new data (milliseconds). Change it here, in one place.
+export const SYNC_MS = 10000;
+
+// Calls fn every `ms` milliseconds while the page is visible and online.
+// - never overlaps itself (a slow request just skips the next beat)
+// - refreshes straight away when the tab becomes visible again or the network returns
+// - a failed beat is ignored; the next one retries
+export function useAutoRefresh(fn, ms = SYNC_MS, enabled = true) {
+  const fnRef = useRef(fn);
+  useEffect(() => { fnRef.current = fn; });
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let busy = false;
+    let stopped = false;
+    const run = async () => {
+      if (busy || stopped) return;
+      if (typeof document !== 'undefined' && document.hidden) return;
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+      busy = true;
+      try { await fnRef.current(); } catch { /* keep the screen as it is; try again next beat */ } finally { busy = false; }
+    };
+    const id = setInterval(run, ms);
+    const onVisible = () => { if (!document.hidden) run(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', run);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', run);
+    };
+  }, [ms, enabled]);
+}
+
+// Loads data for a screen. Keeps the previous data on screen while reloading, so
+// refreshing never flashes a spinner. With { every: ms } it also re-fetches in
+// the background. A result only lands if no newer request has started, so a slow
+// background fetch can never overwrite fresher data from an action.
+export function useLoader(fn, deps, opts = {}) {
+  const every = opts.every || 0;
   const [state, setState] = useState({ data: null, loading: true, error: '' });
   const [tick, setTick] = useState(0);
+  const fnRef = useRef(fn);
+  useEffect(() => { fnRef.current = fn; });
+  const seq = useRef(0);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+
   useEffect(() => {
-    let live = true;
+    const mine = ++seq.current;
     setState(s => ({ ...s, loading: true, error: '' }));
     fn().then(
-      d => { if (live) setState({ data: d, loading: false, error: '' }); },
-      e => { if (live) setState(s => ({ ...s, loading: false, error: (e && e.message) || 'Something went wrong' })); },
+      d => { if (alive.current && seq.current === mine) setState({ data: d, loading: false, error: '' }); },
+      e => { if (alive.current && seq.current === mine) setState(s => ({ ...s, loading: false, error: (e && e.message) || 'Something went wrong' })); },
     );
-    return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, tick]);
-  return { ...state, reload: () => setTick(t => t + 1) };
+
+  const refresh = useCallback(async () => {
+    const mine = ++seq.current;
+    try {
+      const d = await fnRef.current();
+      if (alive.current && seq.current === mine) setState({ data: d, loading: false, error: '' });
+    } catch { /* keep what is on screen */ }
+  }, []);
+  useAutoRefresh(refresh, every || SYNC_MS, every > 0);
+
+  return { ...state, reload: () => setTick(t => t + 1), refresh };
 }

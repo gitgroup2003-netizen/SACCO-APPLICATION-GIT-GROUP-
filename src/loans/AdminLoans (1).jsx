@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
   ArrowLeft, Phone, MessageCircle, Plus, Check, X, MapPin, Download, Landmark, TrendingUp, AlertTriangle, Wallet,
@@ -8,7 +8,7 @@ import {
   BarChart, Bar as RBar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, PieChart, Pie,
 } from 'recharts';
 import {
-  useKit, tints, rpc, quote, buildSchedule, dueLabel, daysUntil, waLink, paidPct, useLoader,
+  SYNC_MS, useKit, tints, rpc, quote, buildSchedule, dueLabel, daysUntil, waLink, paidPct, useLoader,
   OPEN_STAGES, STAGE_LABEL, STAGES, headroomOf,
 } from './kit.js';
 import {
@@ -34,8 +34,13 @@ export default function LoanDesk({ profile, token, perms, savingsMap = {}, share
   const [sub, setSub] = useState('overview');
   const [openId, setOpenId] = useState(null);
 
+  const lastSweep = useRef(0);
   const L = useLoader(async () => {
-    try { await rpc(kit, token, 'refresh_arrears'); } catch { /* arrears refresh is best effort */ }
+    // The overdue sweep is idempotent; run it on open, then at most every 5 minutes.
+    if (Date.now() - lastSweep.current > 5 * 60 * 1000) {
+      lastSweep.current = Date.now();
+      try { await rpc(kit, token, 'refresh_arrears'); } catch { /* best effort */ }
+    }
     const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
     const [loans, products, settings, reps] = await Promise.all([
       kit.sb('/rest/v1/loan_portfolio?select=*&order=applied_at.desc', { token }),
@@ -44,7 +49,7 @@ export default function LoanDesk({ profile, token, perms, savingsMap = {}, share
       kit.sb(`/rest/v1/loan_repayments?created_at=gte.${encodeURIComponent(monthStart.toISOString())}&select=amount`, { token }),
     ]);
     return { loans: loans || [], products: products || [], settings: settings || [], collected: sum(reps || [], r => r.amount) };
-  }, [token]);
+  }, [token], { every: SYNC_MS });
 
   function changed() { L.reload(); if (onChanged) onChanged(); }
 
@@ -524,7 +529,7 @@ function Limits({ settings, token, canEdit, onChanged }) {
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
   const [ok, setOk] = useState('');
-  const snap = useLoader(() => rpc(kit, token, 'liquidity_snapshot'), [token, settings.map(s => s.value).join('|')]);
+  const snap = useLoader(() => rpc(kit, token, 'liquidity_snapshot'), [token, settings.map(s => s.value).join('|')], { every: SYNC_MS });
   async function save(key) {
     setBusy(key); setErr(''); setOk('');
     try { await rpc(kit, token, 'set_loan_setting', { p_key: key, p_value: Number(vals[key]) }); setOk('Saved.'); onChanged(); }
@@ -589,7 +594,7 @@ function LoanFile({ loan, loans, products, token, profile, perms, approvalLimit,
       kit.sb(`/rest/v1/guarantee_locks?member_id=eq.${loan.member_id}&select=*`, { token }),
     ]);
     return { schedule: schedule || [], events: events || [], collateral: collateral || [], guarantors: guarantors || [], payments: payments || [], locked: Number(((locks || [])[0] || {}).locked_amount || 0) };
-  }, [id, token, loan.stage, loan.outstanding_balance]);
+  }, [id, token, loan.stage, loan.outstanding_balance], { every: SYNC_MS });
 
   const [mode, setMode] = useState(null); // approve | reject | disburse
   const [amount, setAmount] = useState('');

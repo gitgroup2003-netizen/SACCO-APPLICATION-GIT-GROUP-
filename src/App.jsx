@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
@@ -8,6 +8,9 @@ import {
   PiggyBank, TrendingUp, Coins, Receipt, CreditCard, Sparkles, Bell, Megaphone
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, AreaChart, Area, Legend } from 'recharts';
+import { KitContext, useAutoRefresh, SYNC_MS } from './loans/kit.js';
+import MemberLoansTab from './loans/MemberLoans.jsx';
+import LoanDesk from './loans/AdminLoans.jsx';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://tupofpitveaifaemassc.supabase.co';
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable__jw3Hv0tG2wDnjvJ_8o8Qg_3RwRzn9F';
@@ -367,11 +370,14 @@ function AuthScreen({ onAuthed, themeMode, onToggleTheme }) {
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
 
-  async function finishLogin(token, user) {
+  async function finishLogin(token, user, extra = {}) {
     const rows = await sb(`/rest/v1/profiles?id=eq.${user.id}&select=*`, { token });
     const profile = rows && rows[0];
     if (!profile) throw new Error('Signed in, but no profile row exists yet — make sure the schema (with the signup trigger) is installed.');
-    onAuthed({ access_token: token, user }, profile);
+    onAuthed({
+      access_token: token, refresh_token: extra.refresh_token, user,
+      expires_at: extra.expires_at || (extra.expires_in ? Math.floor(Date.now() / 1000) + extra.expires_in : undefined),
+    }, profile);
   }
 
   async function handleSubmit(e) {
@@ -381,14 +387,14 @@ function AuthScreen({ onAuthed, themeMode, onToggleTheme }) {
       if (mode === 'signup') {
         const data = await sb('/auth/v1/signup', { method: 'POST', body: { email, password, data: { full_name: fullName, phone } } });
         if (data.access_token) {
-          await finishLogin(data.access_token, data.user);
+          await finishLogin(data.access_token, data.user, data);
         } else {
           setNotice('Account created. If email confirmation is on, check your inbox — then sign in.');
           setMode('login');
         }
       } else {
         const data = await sb('/auth/v1/token?grant_type=password', { method: 'POST', body: { email, password } });
-        await finishLogin(data.access_token, data.user);
+        await finishLogin(data.access_token, data.user, data);
       }
     } catch (err) {
       setError(err.message);
@@ -1158,6 +1164,13 @@ function ProfileTab({ profile, token, photoUrl }) {
 
 /* ------------------------------ member app ------------------------------ */
 
+// Everything the loan screens need from the host app, passed through context
+// so the loans folder never imports App.jsx (no circular dependency).
+const loanKit = {
+  THEME, fmt, fmtDate, fmtDateTime, shortId, sb, useIsDesktop,
+  Spinner, EmptyState, Badge, Avatar, GhostButton,
+};
+
 function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const [tab, setTab] = useState('overview');
   const [loading, setLoading] = useState(true);
@@ -1167,7 +1180,6 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const [txns, setTxns] = useState([]);
   const [divAlloc, setDivAlloc] = useState([]);
   const [divMap, setDivMap] = useState({});
-  const [showLoanForm, setShowLoanForm] = useState(false);
   const [showStatement, setShowStatement] = useState(false);
   const [statementRequests, setStatementRequests] = useState([]);
   const [viewCertifiedRequest, setViewCertifiedRequest] = useState(null);
@@ -1175,8 +1187,11 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const [withdrawalRequests, setWithdrawalRequests] = useState([]);
   const [announcements, setAnnouncements] = useState([]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+  const load = useCallback(async (quiet) => {
+    const token = tokenRef.current; // always the latest login token
+    if (!quiet) setLoading(true);
     const [sa, sh, ln, tx, da, dv, sr, wr, ann] = await Promise.all([
       sb(`/rest/v1/savings_accounts?member_id=eq.${profile.id}&select=*`, { token }),
       sb(`/rest/v1/shares?member_id=eq.${profile.id}&select=*`, { token }),
@@ -1199,9 +1214,10 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
     setWithdrawalRequests(wr || []);
     setAnnouncements(ann || []);
     setLoading(false);
-  }, [profile.id, token]);
+  }, [profile.id]);
 
   useEffect(() => { load(); }, [load]);
+  useAutoRefresh(() => load(true), SYNC_MS, !loading);
   useEffect(() => { if (profile.photo_url) getSignedPhotoUrl(token, profile.photo_url).then(setMyPhotoUrl); }, [profile.photo_url, token]);
   useEffect(() => {
     checkAndNotifyAnnouncements(token);
@@ -1224,19 +1240,6 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
 
   const activeLoan = loans.find(l => l.status === 'active');
   const pendingLoan = loans.find(l => l.status === 'pending');
-
-  async function applyForLoan(principal, term_months, purpose, overCeiling, repaymentPlan) {
-    await sb('/rest/v1/loans', {
-      method: 'POST', token,
-      body: {
-        member_id: profile.id, principal: Number(principal), term_months: Number(term_months),
-        purpose, status: 'pending', flagged_over_ceiling: !!overCeiling, repayment_plan: repaymentPlan || null,
-      },
-      headers: { Prefer: 'return=minimal' },
-    });
-    setShowLoanForm(false);
-    await load();
-  }
 
   const tabs = [
     { key: 'overview', label: 'Home', icon: Home },
@@ -1319,36 +1322,9 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
             )}
 
             {tab === 'loans' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <PrimaryButton onClick={() => setShowLoanForm(v => !v)}>
-                  <Plus size={15} /> Apply for a loan
-                </PrimaryButton>
-                {showLoanForm && (
-                  <LoanApplyForm
-                    onSubmit={applyForLoan}
-                    onCancel={() => setShowLoanForm(false)}
-                    maxCeiling={(Number(savings.balance) + Number(shares.balance)) * LOAN_MULTIPLIER}
-                    savingsBalance={Number(savings.balance)}
-                  />
-                )}
-                {loans.length === 0 ? <EmptyState text="No loan applications yet." /> : loans.map(l => (
-                  <Card key={l.id}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontFamily: 'Fraunces, serif', fontSize: 18 }}>{fmt(l.principal)}</span>
-                      <Badge color={statusColor(l.status)}>{l.status}</Badge>
-                    </div>
-                    <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 6 }}>
-                      {l.term_months} months · applied {fmtDate(l.applied_at)}
-                      {l.purpose ? ` · ${l.purpose}` : ''}
-                    </div>
-                    {(l.status === 'active' || l.status === 'completed') && (
-                      <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 4 }}>
-                        Outstanding: <b style={{ color: THEME.ink }}>{fmt(l.outstanding_balance)}</b>
-                      </div>
-                    )}
-                  </Card>
-                ))}
-              </div>
+              <KitContext.Provider value={loanKit}>
+                <MemberLoansTab profile={profile} token={token} onChanged={() => load(true)} />
+              </KitContext.Provider>
             )}
 
             {tab === 'activity' && (
@@ -1470,124 +1446,6 @@ function TxnRow({ t, expandable = true }) {
           <div>Balance after: <b style={{ color: THEME.ink }}>{fmt(t.balance_after)}</b></div>
         </div>
       )}
-    </div>
-  );
-}
-
-function LoanApplyForm({ onSubmit, onCancel, maxCeiling = 0, savingsBalance = 0 }) {
-  const [principal, setPrincipal] = useState('');
-  const [term, setTerm] = useState('12');
-  const [purpose, setPurpose] = useState('');
-  const [repaymentPlan, setRepaymentPlan] = useState('');
-  const [busy, setBusy] = useState(false);
-  const overCeiling = Number(principal) > maxCeiling && maxCeiling > 0;
-  const isSpecial = Number(principal) > 2 * savingsBalance && Number(principal) > 0;
-  const canSubmit = principal && (!isSpecial || repaymentPlan.trim().length > 0);
-  return (
-    <Card>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{ fontSize: 12, color: THEME.inkSoft, background: THEME.paper, borderRadius: 8, padding: '8px 10px' }}>
-          Based on your savings + shares, your automated ceiling is <b style={{ color: THEME.ink }}>{fmt(maxCeiling)}</b> ({LOAN_MULTIPLIER}x rule).
-        </div>
-        <Field label="Amount requested (UGX)"><input type="number" min="1" required value={principal} onChange={e => setPrincipal(e.target.value)} style={inputStyle} /></Field>
-        {overCeiling && (
-          <div style={{ fontSize: 12, color: THEME.danger }}>
-            This exceeds your automated ceiling. You can still submit — it will be flagged for manual review.
-          </div>
-        )}
-        {isSpecial && (
-          <div style={{ fontSize: 12, color: THEME.gold, background: THEME.gold + '14', border: `1px solid ${THEME.gold}55`, borderRadius: 8, padding: '8px 10px' }}>
-            This is more than 2× your savings — that makes it a <b>special loan request</b>. Describe your repayment
-            plan below; a manager will review it specifically because of the higher risk.
-          </div>
-        )}
-        <Field label="Term (months)"><input type="number" min="1" required value={term} onChange={e => setTerm(e.target.value)} style={inputStyle} /></Field>
-        <Field label="Purpose"><input value={purpose} onChange={e => setPurpose(e.target.value)} style={inputStyle} placeholder="e.g. School fees" /></Field>
-        {isSpecial && (
-          <Field label="Repayment plan (required for special loans)">
-            <textarea value={repaymentPlan} onChange={e => setRepaymentPlan(e.target.value)} style={{ ...inputStyle, minHeight: 80, resize: 'vertical' }}
-              placeholder="e.g. I will repay 200,000 UGX monthly from my business income, starting next month" />
-          </Field>
-        )}
-        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-          <PrimaryButton style={{ flex: 1 }} disabled={busy || !canSubmit} onClick={async () => {
-            setBusy(true);
-            try { await onSubmit(principal, term, purpose, overCeiling || isSpecial, isSpecial ? repaymentPlan.trim() : ''); } finally { setBusy(false); }
-          }}>{busy ? <Loader2 size={15} className="spin" /> : 'Submit application'}</PrimaryButton>
-          <GhostButton onClick={onCancel}>Cancel</GhostButton>
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-/* ------------------------------- admin app ------------------------------- */
-
-const ROLE_LABELS = {
-  manager: 'Manager', cashier: 'Cashier', loans_officer: 'Loans officer',
-  supervisor: 'Supervisor', board: 'Board', member: 'Member',
-};
-function getPerms(role) {
-  return {
-    manageRoles: role === 'manager',
-    approveAccounts: role === 'manager',
-    recordCash: role === 'manager' || role === 'cashier',
-    viewCash: role === 'manager' || role === 'cashier' || role === 'supervisor',
-    manageLoans: role === 'manager' || role === 'loans_officer',
-    viewLoans: role === 'manager' || role === 'loans_officer' || role === 'supervisor',
-    declareDividends: role === 'manager',
-    viewDividends: role === 'manager' || role === 'board' || role === 'supervisor',
-  };
-}
-
-function DesktopSidebar({ tabs, active, onChange, profile, avatarUrl, themeMode, onToggleTheme, onLogout }) {
-  return (
-    <div style={{
-      width: 240, flexShrink: 0, background: THEME.surface, borderRight: `1px solid ${THEME.line}`,
-      display: 'flex', flexDirection: 'column', padding: '24px 16px', height: '100%', overflowY: 'auto',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 8px', marginBottom: 30 }}>
-        <div style={{
-          width: 36, height: 36, borderRadius: 10, background: `linear-gradient(135deg, ${THEME.pine}, ${THEME.pineDark})`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <ShieldCheck size={18} color={THEME.goldLight} />
-        </div>
-        <div style={{ fontFamily: 'Fraunces, serif', fontSize: 16, color: THEME.ink }}>Amani SACCO</div>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1 }}>
-        {tabs.map(t => (
-          <button key={t.key} onClick={() => onChange(t.key)} style={{
-            display: 'flex', alignItems: 'center', gap: 11, padding: '11px 12px', borderRadius: 10, border: 'none',
-            cursor: 'pointer', textAlign: 'left', fontSize: 14, fontWeight: 600,
-            background: active === t.key ? THEME.pine : 'transparent',
-            color: active === t.key ? '#fff' : THEME.inkSoft,
-          }}>
-            <t.icon size={17} />
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      <button onClick={onToggleTheme} style={{
-        display: 'flex', alignItems: 'center', gap: 11, padding: '11px 12px', borderRadius: 10, border: 'none',
-        cursor: 'pointer', textAlign: 'left', fontSize: 14, fontWeight: 600, background: 'transparent', color: THEME.inkSoft, marginBottom: 4,
-      }}>
-        {themeMode === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
-        {themeMode === 'dark' ? 'Light mode' : 'Dark mode'}
-      </button>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 12, background: THEME.paper, marginTop: 8 }}>
-        <Avatar name={profile.full_name} photoUrl={avatarUrl} size={36} />
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{profile.full_name}</div>
-          <div style={{ fontSize: 11, color: THEME.inkSoft }}>{ROLE_LABELS[profile.role] || profile.role}</div>
-        </div>
-        <button onClick={onLogout} title="Sign out" style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}>
-          <LogOut size={15} color={THEME.inkSoft} />
-        </button>
-      </div>
     </div>
   );
 }
@@ -1756,8 +1614,11 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const [profileChangeRequestsAll, setProfileChangeRequestsAll] = useState([]);
   const [announcements, setAnnouncements] = useState([]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+  const load = useCallback(async (quiet) => {
+    const token = tokenRef.current; // always the latest login token
+    if (!quiet) setLoading(true);
     const [pf, sa, sh, ln, tx, dv, sr, wr, pcr, ann] = await Promise.all([
       sb('/rest/v1/profiles?select=*&order=created_at.desc', { token }),
       sb('/rest/v1/savings_accounts?select=*', { token }),
@@ -1777,9 +1638,10 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
     setProfileChangeRequestsAll(pcr || []);
     setAnnouncements(ann || []);
     setLoading(false);
-  }, [token]);
+  }, []);
 
   useEffect(() => { load(); }, [load]);
+  useAutoRefresh(() => load(true), SYNC_MS, !loading);
   useEffect(() => { if (profile.photo_url) getSignedPhotoUrl(token, profile.photo_url).then(setMyPhotoUrl); }, [profile.photo_url, token]);
   useEffect(() => {
     checkAndNotifyAnnouncements(token);
@@ -1926,7 +1788,6 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const totalOutstanding = loansAll.filter(l => l.status === 'active').reduce((s, r) => s + Number(r.outstanding_balance || 0), 0);
   const pendingMembers = profiles.filter(p => p.status === 'pending');
   const pendingLoans = loansAll.filter(l => l.status === 'pending');
-  const activeLoans = loansAll.filter(l => l.status === 'active');
 
   const chartData = [
     { name: 'Savings', value: Math.round(totalSavings) },
@@ -1968,40 +1829,6 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
 
   const DONUT_COLORS = [THEME.pine, THEME.gold, THEME.danger, THEME.success];
 
-  async function approveLoan(loan) {
-    await sb(`/rest/v1/loans?id=eq.${loan.id}`, {
-      method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
-      body: { status: 'active', approved_at: new Date().toISOString(), approved_by: profile.id, outstanding_balance: loan.principal, disbursed_at: new Date().toISOString() },
-    });
-    await sb('/rest/v1/transactions', {
-      method: 'POST', token, headers: { Prefer: 'return=minimal' },
-      body: { member_id: loan.member_id, type: 'loan_disbursement', amount: loan.principal, notes: 'Loan approved and disbursed', created_by: profile.id },
-    });
-    await load();
-  }
-  async function rejectLoan(loan) {
-    await sb(`/rest/v1/loans?id=eq.${loan.id}`, {
-      method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
-      body: { status: 'rejected', approved_at: new Date().toISOString(), approved_by: profile.id },
-    });
-    await load();
-  }
-  async function recordRepayment(loan, amount) {
-    await sb('/rest/v1/loan_repayments', {
-      method: 'POST', token, headers: { Prefer: 'return=minimal' },
-      body: { loan_id: loan.id, amount: Number(amount), recorded_by: profile.id },
-    });
-    const newOutstanding = Math.max(0, Number(loan.outstanding_balance) - Number(amount));
-    await sb(`/rest/v1/loans?id=eq.${loan.id}`, {
-      method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
-      body: { outstanding_balance: newOutstanding, status: newOutstanding <= 0 ? 'completed' : 'active' },
-    });
-    await sb('/rest/v1/transactions', {
-      method: 'POST', token, headers: { Prefer: 'return=minimal' },
-      body: { member_id: loan.member_id, type: 'loan_repayment', amount: Number(amount), notes: 'Loan repayment received', created_by: profile.id },
-    });
-    await load();
-  }
   async function recordTxn(memberId, type, amount, paymentMode, notes, date) {
     const createdAt = date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString();
 
@@ -2330,49 +2157,10 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
             )}
 
             {tab === 'loans' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Pending applications</div>
-                  {pendingLoans.length === 0 ? <EmptyState text="Nothing waiting for approval." /> : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      {pendingLoans.map(l => (
-                        <Card key={l.id}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                            <div style={{ fontWeight: 700 }}>{(profileMap[l.member_id] || {}).full_name || 'Member'}</div>
-                            {l.repayment_plan ? <Badge color={THEME.gold}>special request</Badge> : l.flagged_over_ceiling && <Badge color={THEME.danger}>over ceiling</Badge>}
-                          </div>
-                          <div style={{ fontFamily: 'Fraunces, serif', fontSize: 18, marginTop: 4 }}>{fmt(l.principal)}</div>
-                          <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 2 }}>{l.term_months} months{l.purpose ? ` · ${l.purpose}` : ''}</div>
-                          {l.repayment_plan && (
-                            <div style={{ fontSize: 12, color: THEME.ink, background: THEME.paper, borderRadius: 8, padding: '8px 10px', marginTop: 8 }}>
-                              <b>Repayment plan:</b> {l.repayment_plan}
-                            </div>
-                          )}
-                          <GhostButton style={{ marginTop: 10, width: '100%' }} onClick={() => setViewMemberId(l.member_id)}>
-                            View applicant's full profile
-                          </GhostButton>
-                          {perms.manageLoans ? (
-                            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                              <PrimaryButton style={{ flex: 1 }} onClick={() => approveLoan(l)}><Check size={14} /> Approve</PrimaryButton>
-                              <GhostButton style={{ flex: 1, borderColor: THEME.danger, color: THEME.danger }} onClick={() => rejectLoan(l)}><X size={14} style={{ marginRight: 4 }} />Reject</GhostButton>
-                            </div>
-                          ) : (
-                            <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 10 }}>View only — only a manager or loans officer can act on this.</div>
-                          )}
-                        </Card>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Active loans</div>
-                  {activeLoans.length === 0 ? <EmptyState text="No active loans." /> : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      {activeLoans.map(l => <ActiveLoanRow key={l.id} loan={l} memberName={(profileMap[l.member_id] || {}).full_name} onRepay={recordRepayment} onViewProfile={() => setViewMemberId(l.member_id)} readOnly={!perms.manageLoans} />)}
-                    </div>
-                  )}
-                </div>
-              </div>
+              <KitContext.Provider value={loanKit}>
+                <LoanDesk profile={profile} token={token} perms={perms} savingsMap={savingsMap} sharesMap={sharesMap}
+                  onViewMember={setViewMemberId} onChanged={() => load(true)} />
+              </KitContext.Provider>
             )}
 
             {tab === 'transactions' && (
@@ -2495,33 +2283,6 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
 
       <BottomNav tabs={tabs} active={tab} onChange={setTab} />
     </div>
-  );
-}
-
-function ActiveLoanRow({ loan, memberName, onRepay, onViewProfile, readOnly = false }) {
-  const [amount, setAmount] = useState('');
-  const [busy, setBusy] = useState(false);
-  return (
-    <Card>
-      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <div style={{ fontWeight: 700 }}>{memberName || 'Member'}</div>
-        <span style={{ fontSize: 12, color: THEME.inkSoft }}>Outstanding {fmt(loan.outstanding_balance)}</span>
-      </div>
-      {onViewProfile && (
-        <button onClick={onViewProfile} style={{ background: 'none', border: 'none', padding: 0, marginTop: 4, color: THEME.pine, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
-          View full profile
-        </button>
-      )}
-      {!readOnly && (
-        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-          <input type="number" min="1" placeholder="Repayment amount" value={amount} onChange={e => setAmount(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
-          <PrimaryButton disabled={busy || !amount} onClick={async () => {
-            setBusy(true);
-            try { await onRepay(loan, amount); setAmount(''); } finally { setBusy(false); }
-          }}>{busy ? <Loader2 size={14} className="spin" /> : 'Record'}</PrimaryButton>
-        </div>
-      )}
-    </Card>
   );
 }
 
@@ -2985,6 +2746,41 @@ export default function App() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Keeps the login alive and the profile current. Approval, role and suspension
+  // changes arrive within about 10 seconds, and the token is renewed before it expires.
+  const sessionRef = useRef(session);
+  const profileRef = useRef(profile);
+  useEffect(() => { sessionRef.current = session; profileRef.current = profile; });
+  const signOutLocal = useCallback(() => { setSession(null); setProfile(null); }, []);
+  const syncSession = useCallback(async () => {
+    let cur = sessionRef.current;
+    if (!cur || !profileRef.current) return;
+    const isNetwork = e => e instanceof TypeError || /failed to fetch|network|load failed/i.test(String(e && e.message));
+    const secondsLeft = cur.expires_at ? cur.expires_at - Date.now() / 1000 : null;
+    if (cur.refresh_token && secondsLeft !== null && secondsLeft < 300) {
+      try {
+        const d = await sb('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: { refresh_token: cur.refresh_token } });
+        cur = {
+          ...cur, access_token: d.access_token, refresh_token: d.refresh_token || cur.refresh_token,
+          expires_at: d.expires_at || Math.floor(Date.now() / 1000) + (d.expires_in || 3600), user: d.user || cur.user,
+        };
+        sessionRef.current = cur;
+        setSession(cur);
+      } catch (e) {
+        if (!isNetwork(e)) signOutLocal();
+        return;
+      }
+    }
+    try {
+      const rows = await sb('/rest/v1/profiles?id=eq.' + cur.user.id + '&select=*', { token: cur.access_token });
+      if (!rows || !rows[0]) { signOutLocal(); return; }
+      if (JSON.stringify(rows[0]) !== JSON.stringify(profileRef.current)) setProfile(rows[0]);
+    } catch (e) {
+      if (!isNetwork(e) && /jwt|expired|token/i.test(String(e && e.message))) signOutLocal();
+    }
+  }, [signOutLocal]);
+  useAutoRefresh(syncSession, SYNC_MS, !!session && !!profile && !checkingSession);
 
   if (checkingSession) {
     return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spinner /></div>;

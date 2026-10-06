@@ -11,6 +11,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import { KitContext, useAutoRefresh, SYNC_MS } from './loans/kit.js';
 import MemberLoansTab from './loans/MemberLoans.jsx';
 import LoanDesk from './loans/AdminLoans.jsx';
+import FinanceHub from './Finance.jsx';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://tupofpitveaifaemassc.supabase.co';
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable__jw3Hv0tG2wDnjvJ_8o8Qg_3RwRzn9F';
@@ -115,6 +116,12 @@ async function sb(path, { method = 'GET', body, token, headers = {} } = {}) {
     throw new Error(msg);
   }
   return data;
+}
+
+// Calls a database function (RPC). Money-changing work happens inside these functions,
+// in one atomic step, so balances and the ledger can never disagree.
+async function rpcCall(token, name, args) {
+  return sb(`/rest/v1/rpc/${name}`, { method: 'POST', token, body: args || {} });
 }
 
 async function uploadKycPhoto(token, userId, file, filename = 'photo.jpg') {
@@ -808,7 +815,8 @@ function WithdrawalRequestCard({ savings, withdrawalRequests, onRequest }) {
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
-  const balance = Number(savings.balance);
+  const locked = Number(savings.compulsory_balance || 0) + Number(savings.non_withdrawable_balance || 0);
+  const balance = Number(savings.balance) - locked;
   const hasPending = withdrawalRequests.some(r => r.status === 'pending');
   const amountNum = Number(amount);
   const overBalance = amountNum > balance;
@@ -1289,6 +1297,11 @@ function MemberApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                   <StatCard label="Savings" value={fmt(savings.balance)} accent={THEME.pine} icon={PiggyBank} />
                   <StatCard label="Shares" value={fmt(shares.balance)} accent={THEME.gold} icon={Coins} />
                 </div>
+                {(Number(savings.compulsory_balance) > 0 || Number(savings.non_withdrawable_balance) > 0) && (
+                  <div style={{ fontSize: 12, color: THEME.inkSoft, padding: '0 4px' }}>
+                    Of your savings, {fmt(Number(savings.compulsory_balance || 0) + Number(savings.non_withdrawable_balance || 0))} is held as compulsory or non-withdrawable savings. You can withdraw up to {fmt(Number(savings.balance) - Number(savings.compulsory_balance || 0) - Number(savings.non_withdrawable_balance || 0))}.
+                  </div>
+                )}
                 {activeLoan && (
                   <div onClick={() => setTab('loans')} style={{ cursor: 'pointer' }}>
                     <Card>
@@ -1597,14 +1610,15 @@ function DesktopOverview({
 
 const ROLE_LABELS = {
   manager: 'Manager', cashier: 'Cashier', loans_officer: 'Loans officer',
-  supervisor: 'Supervisor', board: 'Board', member: 'Member',
+  supervisor: 'Supervisor', board: 'Board', accountant: 'Accountant', member: 'Member',
 };
 function getPerms(role) {
   return {
     manageRoles: role === 'manager',
     approveAccounts: role === 'manager',
     recordCash: role === 'manager' || role === 'cashier',
-    viewCash: role === 'manager' || role === 'cashier' || role === 'supervisor',
+    viewCash: role === 'manager' || role === 'cashier' || role === 'supervisor' || role === 'accountant',
+    viewFinance: role === 'manager' || role === 'accountant' || role === 'supervisor' || role === 'board',
     manageLoans: role === 'manager' || role === 'loans_officer',
     viewLoans: role === 'manager' || role === 'loans_officer' || role === 'supervisor',
     declareDividends: role === 'manager',
@@ -1684,13 +1698,25 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const [withdrawalRequestsAll, setWithdrawalRequestsAll] = useState([]);
   const [profileChangeRequestsAll, setProfileChangeRequestsAll] = useState([]);
   const [announcements, setAnnouncements] = useState([]);
+  const [pendingTxnsAll, setPendingTxnsAll] = useState([]);
+  const [approvalLimit, setApprovalLimit] = useState(5000000);
+  const [flash, setFlash] = useState(null);
+  const [wd, setWd] = useState({});
+  const [compAlert, setCompAlert] = useState(null);
+
+  useEffect(() => {
+    if (!flash) return undefined;
+    const t = setTimeout(() => setFlash(null), flash.kind === 'error' ? 9000 : 5000);
+    return () => clearTimeout(t);
+  }, [flash]);
 
   const tokenRef = useRef(token);
+  const call_compliance = () => rpcCall(token, 'compliance_snapshot', {}).then(c => setCompAlert(c && c.gl_active && c.worst !== 'green' ? c : null)).catch(() => setCompAlert(null));
   tokenRef.current = token;
   const load = useCallback(async (quiet) => {
     const token = tokenRef.current; // always the latest login token
     if (!quiet) setLoading(true);
-    const [pf, sa, sh, ln, tx, dv, sr, wr, pcr, ann] = await Promise.all([
+    const [pf, sa, sh, ln, tx, dv, sr, wr, pcr, ann, ptx, lset] = await Promise.all([
       sb('/rest/v1/profiles?select=*&order=created_at.desc', { token }),
       sb('/rest/v1/savings_accounts?select=*', { token }),
       sb('/rest/v1/shares?select=*', { token }),
@@ -1701,7 +1727,12 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
       sb('/rest/v1/withdrawal_requests?status=eq.pending&select=*&order=requested_at.asc', { token }),
       sb('/rest/v1/profile_change_requests?status=eq.pending&select=*&order=requested_at.asc', { token }),
       sb('/rest/v1/announcements?select=*&order=created_at.desc&limit=20', { token }),
+      sb('/rest/v1/pending_transactions?status=eq.pending&select=*&order=requested_at.asc', { token }).catch(() => []),
+      sb('/rest/v1/ledger_settings?key=eq.maker_checker_threshold&select=value', { token }).catch(() => []),
     ]);
+    setPendingTxnsAll(ptx || []);
+    if (perms.viewFinance) call_compliance();
+    if (lset && lset[0]) setApprovalLimit(Number(lset[0].value));
     setProfiles(pf || []); setSavingsAll(sa || []); setSharesAll(sh || []);
     setLoansAll(ln || []); setTxnsAll(tx || []); setDividendsAll(dv || []);
     setStatementRequestsAll(sr || []);
@@ -1738,27 +1769,11 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
     await load();
   }
 
-  async function decideWithdrawalRequest(req, status) {
-    if (status === 'approved') {
-      const acct = savingsMap[req.member_id] || { balance: 0 };
-      const newBal = Number(acct.balance) - Number(req.amount);
-      await sb(`/rest/v1/savings_accounts?member_id=eq.${req.member_id}`, {
-        method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
-        body: { balance: newBal, updated_at: new Date().toISOString() },
-      });
-      await sb('/rest/v1/transactions', {
-        method: 'POST', token, headers: { Prefer: 'return=minimal' },
-        body: {
-          member_id: req.member_id, type: 'withdrawal', amount: Number(req.amount), balance_after: newBal,
-          payment_mode: 'other', notes: req.note ? `Withdrawal request: ${req.note}` : 'Approved withdrawal request', created_by: profile.id,
-        },
-      });
-    }
-    await sb(`/rest/v1/withdrawal_requests?id=eq.${req.id}`, {
-      method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
-      body: { status, decided_at: new Date().toISOString(), decided_by: profile.id },
-    });
-    await load();
+  async function decideWithdrawalRequest(req, status, mode, reference) {
+    return guarded(async () => {
+      await rpcCall(token, 'decide_withdrawal_request', { p_id: req.id, p_approve: status === 'approved', p_reason: null, p_mode: mode || 'cash', p_reference: reference || null });
+      await load(true);
+    }, status === 'approved' ? 'Withdrawal approved and posted.' : 'Withdrawal request rejected.');
   }
 
   async function decideProfileChangeRequest(req, status) {
@@ -1815,37 +1830,18 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
     if (form.nokRelationship) profilePatch.next_of_kin_relationship = form.nokRelationship;
     await sb(`/rest/v1/profiles?id=eq.${newUserId}`, { method: 'PATCH', token, headers: { Prefer: 'return=minimal' }, body: profilePatch });
 
-    // 4. Opening balances
-    const openingSavings = Number(form.openingSavings) || 0;
-    const openingShares = Number(form.openingShares) || 0;
-    await sb(`/rest/v1/savings_accounts?member_id=eq.${newUserId}`, {
-      method: 'PATCH', token, headers: { Prefer: 'return=minimal' }, body: { balance: openingSavings, updated_at: new Date().toISOString() },
+    // 4 + 5. Opening balances (and optional last-transaction history) are written by one
+    //        database function, in a single step, so they can never be half-recorded.
+    await rpcCall(token, 'onboard_opening_balances', {
+      p_member: newUserId,
+      p_savings: Number(form.openingSavings) || 0,
+      p_shares: Number(form.openingShares) || 0,
+      p_last_type: form.lastTxnType && form.lastTxnAmount ? form.lastTxnType : null,
+      p_last_amount: form.lastTxnType && form.lastTxnAmount ? Number(form.lastTxnAmount) : null,
+      p_last_mode: form.lastTxnPaymentMode || 'other',
+      p_last_notes: form.lastTxnNotes || null,
+      p_last_date: form.lastTxnDate || null,
     });
-    await sb(`/rest/v1/shares?member_id=eq.${newUserId}`, {
-      method: 'PATCH', token, headers: { Prefer: 'return=minimal' }, body: { balance: openingShares, updated_at: new Date().toISOString() },
-    });
-    await sb('/rest/v1/transactions', {
-      method: 'POST', token, headers: { Prefer: 'return=minimal' },
-      body: { member_id: newUserId, type: 'balance_adjustment', amount: openingSavings, balance_after: openingSavings, payment_mode: 'other', notes: 'Opening savings balance (existing member onboarded)', created_by: profile.id },
-    });
-    await sb('/rest/v1/transactions', {
-      method: 'POST', token, headers: { Prefer: 'return=minimal' },
-      body: { member_id: newUserId, type: 'shares_adjustment', amount: openingShares, balance_after: openingShares, payment_mode: 'other', notes: 'Opening shares balance (existing member onboarded)', created_by: profile.id },
-    });
-
-    // 5. Optional: log their most recent known transaction, for audit continuity
-    if (form.lastTxnType && form.lastTxnAmount) {
-      const createdAt = form.lastTxnDate ? new Date(form.lastTxnDate + 'T12:00:00').toISOString() : new Date().toISOString();
-      const balanceAfter = form.lastTxnType === 'share_purchase' ? openingShares : openingSavings;
-      await sb('/rest/v1/transactions', {
-        method: 'POST', token, headers: { Prefer: 'return=minimal' },
-        body: {
-          member_id: newUserId, type: form.lastTxnType, amount: Number(form.lastTxnAmount), balance_after: balanceAfter,
-          payment_mode: form.lastTxnPaymentMode || 'other', notes: form.lastTxnNotes || 'Most recent transaction on record at onboarding',
-          created_by: profile.id, created_at: createdAt,
-        },
-      });
-    }
 
     await load();
   }
@@ -1900,61 +1896,50 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
 
   const DONUT_COLORS = [THEME.pine, THEME.gold, THEME.danger, THEME.success];
 
-  async function recordTxn(memberId, type, amount, paymentMode, notes, date) {
-    const createdAt = date ? new Date(date + 'T12:00:00').toISOString() : new Date().toISOString();
+  // Runs an admin action, shows a clear success/error message, and never leaves a silent failure.
+  async function guarded(fn, okText) {
+    try {
+      const r = await fn();
+      if (okText) setFlash({ kind: 'ok', text: okText });
+      return r === undefined ? true : r;
+    } catch (e) {
+      setFlash({ kind: 'error', text: (e && e.message) || 'Something went wrong. Nothing was changed.' });
+      return null;
+    }
+  }
 
-    if (type === 'shares_adjustment') {
-      const newBal = Number(amount);
-      await sb(`/rest/v1/shares?member_id=eq.${memberId}`, {
-        method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
-        body: { balance: newBal, updated_at: new Date().toISOString() },
+  async function recordTxn(memberId, type, amount, paymentMode, notes, date, reference, kind) {
+    const isAdj = type === 'balance_adjustment' || type === 'shares_adjustment';
+    const defaultNote = type === 'balance_adjustment' ? 'Opening savings balance' : type === 'shares_adjustment' ? 'Opening shares balance' : null;
+    return guarded(async () => {
+      const res = await rpcCall(token, 'post_transaction', {
+        p_member: memberId, p_type: type, p_amount: Number(amount),
+        p_mode: isAdj ? 'other' : (paymentMode || 'cash'), p_notes: notes || defaultNote,
+        p_date: date || null, p_reference: reference || null, p_kind: kind || 'voluntary',
       });
-      await sb('/rest/v1/transactions', {
-        method: 'POST', token, headers: { Prefer: 'return=minimal' },
-        body: { member_id: memberId, type, amount: newBal, balance_after: newBal, payment_mode: 'other', notes: notes || 'Opening shares balance', created_by: profile.id, created_at: createdAt },
-      });
-      await load();
-      return;
-    }
-    if (type === 'balance_adjustment') {
-      const newBal = Number(amount);
-      await sb(`/rest/v1/savings_accounts?member_id=eq.${memberId}`, {
-        method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
-        body: { balance: newBal, updated_at: new Date().toISOString() },
-      });
-      await sb('/rest/v1/transactions', {
-        method: 'POST', token, headers: { Prefer: 'return=minimal' },
-        body: { member_id: memberId, type, amount: newBal, balance_after: newBal, payment_mode: 'other', notes: notes || 'Opening savings balance', created_by: profile.id, created_at: createdAt },
-      });
-      await load();
-      return;
-    }
-    if (type === 'share_purchase') {
-      const acct = sharesMap[memberId] || { balance: 0 };
-      const newBal = Number(acct.balance) + Number(amount);
-      await sb(`/rest/v1/shares?member_id=eq.${memberId}`, {
-        method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
-        body: { balance: newBal, updated_at: new Date().toISOString() },
-      });
-      await sb('/rest/v1/transactions', {
-        method: 'POST', token, headers: { Prefer: 'return=minimal' },
-        body: { member_id: memberId, type, amount: Number(amount), balance_after: newBal, payment_mode: paymentMode, notes, created_by: profile.id, created_at: createdAt },
-      });
-      await load();
-      return;
-    }
-    // deposit, withdrawal, dividend — all credit/debit the savings balance
-    const acct = savingsMap[memberId] || { balance: 0 };
-    const newBal = type === 'withdrawal' ? Number(acct.balance) - Number(amount) : Number(acct.balance) + Number(amount);
-    await sb(`/rest/v1/savings_accounts?member_id=eq.${memberId}`, {
-      method: 'PATCH', token, headers: { Prefer: 'return=minimal' },
-      body: { balance: newBal, updated_at: new Date().toISOString() },
+      await load(true);
+      if (res && res.status === 'pending') setFlash({ kind: 'info', text: res.message });
+      else setFlash({ kind: 'ok', text: 'Transaction recorded.' });
+      return res || true;
     });
-    await sb('/rest/v1/transactions', {
-      method: 'POST', token, headers: { Prefer: 'return=minimal' },
-      body: { member_id: memberId, type, amount: Number(amount), balance_after: newBal, payment_mode: paymentMode, notes, created_by: profile.id, created_at: createdAt },
-    });
-    await load();
+  }
+  async function decidePendingTxn(item, approve) {
+    return guarded(async () => {
+      await rpcCall(token, 'decide_pending_transaction', { p_id: item.id, p_approve: approve, p_reason: null });
+      await load(true);
+    }, approve ? 'Approved and posted.' : 'Rejected. No balance was changed.');
+  }
+  async function transferShares(from, to, amount, note) {
+    return guarded(async () => { await rpcCall(token, 'transfer_shares', { p_from: from, p_to: to, p_amount: Number(amount), p_note: note || null }); await load(true); }, 'Shares transferred.');
+  }
+  async function releaseSavings(member, kind, amount, note) {
+    return guarded(async () => { await rpcCall(token, 'release_restricted_savings', { p_member: member, p_kind: kind, p_amount: Number(amount), p_note: note || null }); await load(true); }, 'Savings released to the member\'s withdrawable balance.');
+  }
+  async function saveApprovalLimit(value) {
+    return guarded(async () => {
+      await rpcCall(token, 'set_ledger_setting', { p_key: 'maker_checker_threshold', p_value: Number(value) });
+      await load(true);
+    }, 'Approval limit saved.');
   }
   async function toggleMemberStatus(m) {
     const newStatus = m.status === 'active' ? 'suspended' : 'active';
@@ -1973,29 +1958,19 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
     await load();
   }
   async function declareDividend(year, totalPool) {
-    const eligible = sharesAll.filter(r => Number(r.balance) > 0);
-    if (totalShares <= 0 || eligible.length === 0) { alert('No members hold shares yet.'); return; }
-    const [div] = await sb('/rest/v1/dividends', {
-      method: 'POST', token, headers: { Prefer: 'return=representation' },
-      body: { year: Number(year), total_pool: Number(totalPool), declared_by: profile.id },
+    return guarded(async () => {
+      const r = await rpcCall(token, 'declare_dividend', { p_year: Number(year), p_pool: Number(totalPool) });
+      await load(true);
+      setFlash({ kind: 'ok', text: `Dividend declared: ${fmt(r.total_paid)} paid to ${r.members_paid} members.` });
+      return true;
     });
-    for (const r of eligible) {
-      const amount = Math.round((Number(r.balance) / totalShares) * Number(totalPool) * 100) / 100;
-      if (amount <= 0) continue;
-      await sb('/rest/v1/dividend_allocations', { method: 'POST', token, headers: { Prefer: 'return=minimal' }, body: { dividend_id: div.id, member_id: r.member_id, amount } });
-      const acct = savingsMap[r.member_id] || { balance: 0 };
-      const newBal = Number(acct.balance) + amount;
-      await sb(`/rest/v1/savings_accounts?member_id=eq.${r.member_id}`, { method: 'PATCH', token, headers: { Prefer: 'return=minimal' }, body: { balance: newBal } });
-      await sb('/rest/v1/transactions', { method: 'POST', token, headers: { Prefer: 'return=minimal' }, body: { member_id: r.member_id, type: 'dividend', amount, notes: `Dividend for ${year}`, created_by: profile.id } });
-    }
-    await load();
   }
 
   const tabs = [
     { key: 'overview', label: 'Overview', icon: PieIcon },
     { key: 'members', label: 'Members', icon: Users },
     ...(perms.viewLoans ? [{ key: 'loans', label: 'Loans', icon: Landmark }] : []),
-    ...(perms.viewCash ? [{ key: 'transactions', label: 'Finances', icon: Wallet }] : []),
+    ...(perms.viewCash || perms.viewFinance ? [{ key: 'transactions', label: 'Finance', icon: Wallet }] : []),
     ...(perms.viewDividends ? [{ key: 'dividends', label: 'Dividends', icon: Gift }] : []),
     { key: 'messages', label: 'Messages', icon: Megaphone },
   ];
@@ -2006,6 +1981,20 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   const tabContent = (
     loading ? <Spinner /> : (
       <>
+        {flash && (
+          <div role="status" onClick={() => setFlash(null)} style={{
+            position: 'fixed', top: 14, left: '50%', transform: 'translateX(-50%)', zIndex: 2000, maxWidth: 'min(92vw, 460px)', width: 'max-content',
+            padding: '11px 16px', borderRadius: 12, fontSize: 13.5, fontWeight: 600, lineHeight: 1.4, cursor: 'pointer',
+            background: flash.kind === 'error' ? THEME.danger : flash.kind === 'info' ? THEME.gold : THEME.success, color: '#fff',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+          }}>{flash.text}</div>
+        )}
+        {compAlert && tab === 'overview' && (
+          <div role="alert" onClick={() => setTab('transactions')} style={{ cursor: 'pointer', marginBottom: 12, padding: '12px 14px', borderRadius: 14, color: '#fff', fontSize: 13, lineHeight: 1.45, background: compAlert.worst === 'red' ? THEME.danger : THEME.gold }}>
+            <b>{compAlert.worst === 'red' ? 'Compliance limit breached' : 'Compliance - approaching a limit'}</b>
+            {compAlert.alerts.map((a, k) => <div key={k}>{a}</div>)}
+          </div>
+        )}
         {tab === 'overview' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <NotificationPrompt />
@@ -2210,6 +2199,7 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                               <option value="loans_officer">Loans officer</option>
                               <option value="supervisor">Supervisor</option>
                               <option value="board">Board</option>
+                              <option value="accountant">Accountant</option>
                               <option value="manager">Manager</option>
                             </select>
                             <GhostButton onClick={() => toggleMemberStatus(m)}>
@@ -2235,8 +2225,44 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
             )}
 
             {tab === 'transactions' && (
+              <KitContext.Provider value={loanKit}>
+              <FinanceHub profile={profile} token={token} perms={perms} members={profiles} onChanged={() => load(true)}
+                cashDesk={(perms.recordCash || perms.viewCash) ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                {perms.recordCash && <RecordTxnForm members={profiles} onSubmit={recordTxn} />}
+                {perms.recordCash && <RecordTxnForm members={profiles} onSubmit={recordTxn} approvalLimit={approvalLimit} isManager={profile.role === 'manager'} />}
+                {perms.recordCash && pendingTxnsAll.length > 0 && (
+                  <Card>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Waiting for manager approval ({pendingTxnsAll.length})</div>
+                    <div style={{ fontSize: 11.5, color: THEME.inkSoft, marginBottom: 10 }}>Large amounts entered by staff do not change any balance until a manager approves them.</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {pendingTxnsAll.map(pt => (
+                        <div key={pt.id} style={{ border: `1px solid ${THEME.line}`, borderRadius: 10, padding: 10 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                            <span style={{ fontWeight: 700, fontSize: 13, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {(profileMap[pt.member_id] || {}).full_name || 'Member'} · <span style={{ textTransform: 'capitalize' }}>{pt.type.replace('_', ' ')}</span>
+                            </span>
+                            <b style={{ fontSize: 13, flexShrink: 0 }}>{fmt(pt.amount)}</b>
+                          </div>
+                          <div style={{ fontSize: 11.5, color: THEME.inkSoft, marginTop: 3 }}>
+                            {(pt.payment_mode || 'cash').replace('_', ' ')}{pt.reference ? ` · ref ${pt.reference}` : ''} · entered by {(profileMap[pt.requested_by] || {}).full_name || 'staff'} · {fmtDateTime(pt.requested_at)}
+                          </div>
+                          {pt.notes && <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 3 }}>{pt.notes}</div>}
+                          {profile.role === 'manager' && pt.requested_by !== profile.id ? (
+                            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                              <PrimaryButton style={{ flex: 1, padding: '7px 0', fontSize: 12 }} onClick={() => decidePendingTxn(pt, true)}><Check size={13} /> Approve</PrimaryButton>
+                              <GhostButton style={{ flex: 1, padding: '7px 0', fontSize: 12, borderColor: THEME.danger, color: THEME.danger }} onClick={() => decidePendingTxn(pt, false)}><X size={13} style={{ marginRight: 4 }} />Reject</GhostButton>
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 11.5, color: THEME.gold, fontWeight: 600, marginTop: 8 }}>Waiting for a manager</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+                {profile.role === 'manager' && <ApprovalLimitCard value={approvalLimit} onSave={saveApprovalLimit} />}
+                {perms.recordCash && <ShareTransferCard members={profiles} onSubmit={transferShares} />}
+                {profile.role === 'manager' && <ReleaseSavingsCard members={profiles} onSubmit={releaseSavings} />}
                 {perms.recordCash && withdrawalRequestsAll.length > 0 && (
                   <Card>
                     <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Withdrawal requests ({withdrawalRequestsAll.length})</div>
@@ -2248,8 +2274,16 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                             <b style={{ fontSize: 13, flexShrink: 0 }}>{fmt(r.amount)}</b>
                           </div>
                           {r.note && <div style={{ fontSize: 12, color: THEME.inkSoft, marginTop: 3 }}>{r.note}</div>}
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
+                            <select aria-label="How the money is paid out" value={(wd[r.id] || {}).mode || 'cash'} onChange={e => setWd(x => ({ ...x, [r.id]: { ...(x[r.id] || {}), mode: e.target.value } }))} style={inputStyle}>
+                              {PAYMENT_MODES.filter(pm => ['cash', 'mobile_money', 'bank_transfer', 'cheque'].includes(pm.value)).map(pm => <option key={pm.value} value={pm.value}>Pay out: {pm.label}</option>)}
+                            </select>
+                            {['mobile_money', 'bank_transfer', 'cheque'].includes((wd[r.id] || {}).mode)
+                              ? <input aria-label="Reference" placeholder={(wd[r.id] || {}).mode === 'mobile_money' ? 'Transaction ID (required)' : 'Reference'} value={(wd[r.id] || {}).ref || ''} onChange={e => setWd(x => ({ ...x, [r.id]: { ...(x[r.id] || {}), ref: e.target.value } }))} style={inputStyle} autoComplete="off" />
+                              : <span />}
+                          </div>
                           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                            <PrimaryButton style={{ flex: 1, padding: '7px 0', fontSize: 12 }} onClick={() => decideWithdrawalRequest(r, 'approved')}><Check size={13} /> Approve</PrimaryButton>
+                            <PrimaryButton style={{ flex: 1, padding: '7px 0', fontSize: 12 }} disabled={(wd[r.id] || {}).mode === 'mobile_money' && !((wd[r.id] || {}).ref || '').trim()} onClick={() => decideWithdrawalRequest(r, 'approved', (wd[r.id] || {}).mode, (wd[r.id] || {}).ref)}><Check size={13} /> Approve</PrimaryButton>
                             <GhostButton style={{ flex: 1, padding: '7px 0', fontSize: 12, borderColor: THEME.danger, color: THEME.danger }} onClick={() => decideWithdrawalRequest(r, 'rejected')}><X size={13} style={{ marginRight: 4 }} />Reject</GhostButton>
                           </div>
                         </div>
@@ -2275,6 +2309,8 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
                   ))}
                 </Card>
               </div>
+                ) : null} />
+              </KitContext.Provider>
             )}
 
             {tab === 'dividends' && (
@@ -2357,15 +2393,22 @@ function AdminApp({ profile, token, onLogout, themeMode, onToggleTheme }) {
   );
 }
 
-function RecordTxnForm({ members, onSubmit }) {
+function RecordTxnForm({ members, onSubmit, approvalLimit, isManager }) {
   const [memberId, setMemberId] = useState('');
   const [type, setType] = useState('deposit');
   const [amount, setAmount] = useState('');
   const [paymentMode, setPaymentMode] = useState('cash');
+  const [reference, setReference] = useState('');
+  const [kind, setKind] = useState('voluntary');
   const [notes, setNotes] = useState('');
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [busy, setBusy] = useState(false);
   const isAdjustment = type === 'balance_adjustment' || type === 'shares_adjustment';
+  const managerOnly = isAdjustment || type === 'dividend';
+  const needsRef = !isAdjustment && type !== 'dividend' && ['mobile_money', 'bank_transfer', 'cheque'].includes(paymentMode);
+  const refRequired = needsRef && paymentMode === 'mobile_money';
+  const willNeedApproval = !isManager && !managerOnly && Number(amount) > 0 && Number(amount) >= Number(approvalLimit || 0);
+  const amountOk = amount !== '' && Number.isFinite(Number(amount)) && (isAdjustment ? Number(amount) >= 0 : Number(amount) > 0);
   return (
     <Card>
       <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2 }}>Record cash movement</div>
@@ -2385,16 +2428,30 @@ function RecordTxnForm({ members, onSubmit }) {
             <option value="deposit">Savings deposit</option>
             <option value="withdrawal">Savings withdrawal</option>
             <option value="share_purchase">Share purchase</option>
-            <option value="dividend">Dividend received (historical)</option>
-            <option value="balance_adjustment">Opening savings balance — set to exact amount</option>
-            <option value="shares_adjustment">Opening shares balance — set to exact amount</option>
+            {isManager && <option value="dividend">Dividend received (historical)</option>}
+            {isManager && <option value="balance_adjustment">Opening savings balance — set to exact amount</option>}
+            {isManager && <option value="shares_adjustment">Opening shares balance — set to exact amount</option>}
           </select>
         </Field>
+        {(type === 'deposit' || type === 'balance_adjustment') && (
+          <Field label="Savings type">
+            <select value={kind} onChange={e => setKind(e.target.value)} style={inputStyle}>
+              <option value="voluntary">Voluntary (can be withdrawn)</option>
+              <option value="compulsory">Compulsory (held until the member leaves)</option>
+              <option value="non_withdrawable">Non-withdrawable deposit</option>
+            </select>
+          </Field>
+        )}
         {!isAdjustment && (
           <Field label="Mode of payment">
             <select value={paymentMode} onChange={e => setPaymentMode(e.target.value)} style={inputStyle}>
               {PAYMENT_MODES.map(pm => <option key={pm.value} value={pm.value}>{pm.label}</option>)}
             </select>
+          </Field>
+        )}
+        {needsRef && (
+          <Field label={paymentMode === 'mobile_money' ? 'Mobile money transaction ID (required)' : paymentMode === 'cheque' ? 'Cheque number' : 'Bank reference'}>
+            <input value={reference} onChange={e => setReference(e.target.value)} style={inputStyle} placeholder="Copy it exactly from the confirmation message" autoComplete="off" />
           </Field>
         )}
         <Field label={type === 'balance_adjustment' ? 'Set savings balance to (UGX)' : type === 'shares_adjustment' ? 'Set shares balance to (UGX)' : 'Amount (UGX)'}>
@@ -2403,11 +2460,72 @@ function RecordTxnForm({ members, onSubmit }) {
         <Field label="Date">
           <input type="date" value={date} onChange={e => setDate(e.target.value)} style={inputStyle} max={new Date().toISOString().slice(0, 10)} />
         </Field>
-        <Field label="Notes"><input value={notes} onChange={e => setNotes(e.target.value)} style={inputStyle} placeholder={isAdjustment ? 'e.g. Opening balance from paper ledger' : 'e.g. Mobile money confirmation code'} /></Field>
-        <PrimaryButton disabled={busy || !memberId || amount === ''} onClick={async () => {
+        <Field label="Notes"><input value={notes} onChange={e => setNotes(e.target.value)} style={inputStyle} placeholder={isAdjustment ? 'e.g. Opening balance from paper ledger' : 'Optional'} /></Field>
+        {willNeedApproval && (
+          <div style={{ fontSize: 12, color: THEME.gold, fontWeight: 600 }}>This amount is above the approval limit ({fmt(approvalLimit)}). It will wait for a manager to approve before any balance changes.</div>
+        )}
+        <PrimaryButton disabled={busy || !memberId || !amountOk || (refRequired && !reference.trim())} onClick={async () => {
           setBusy(true);
-          try { await onSubmit(memberId, type, amount, paymentMode, notes, date); setAmount(''); setNotes(''); } finally { setBusy(false); }
-        }}>{busy ? <Loader2 size={15} className="spin" /> : isAdjustment ? 'Set opening balance' : 'Record transaction'}</PrimaryButton>
+          try {
+            const r = await onSubmit(memberId, type, amount, paymentMode, notes, date, needsRef ? reference : '', type === 'deposit' || type === 'balance_adjustment' ? kind : 'voluntary');
+            if (r) { setAmount(''); setNotes(''); setReference(''); }
+          } finally { setBusy(false); }
+        }}>{busy ? <Loader2 size={15} className="spin" /> : isAdjustment ? 'Set opening balance' : willNeedApproval ? 'Send for approval' : 'Record transaction'}</PrimaryButton>
+      </div>
+    </Card>
+  );
+}
+
+function ShareTransferCard({ members, onSubmit }) {
+  const [from, setFrom] = useState(''); const [to, setTo] = useState(''); const [amount, setAmount] = useState(''); const [note, setNote] = useState(''); const [busy, setBusy] = useState(false);
+  const ok = from && to && from !== to && Number(amount) > 0;
+  return (
+    <Card>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2 }}>Transfer shares</div>
+      <p style={{ fontSize: 11.5, color: THEME.inkSoft, margin: '0 0 10px' }}>Moves share value from one member to another. Total share capital does not change.</p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <Field label="From"><select value={from} onChange={e => setFrom(e.target.value)} style={inputStyle}><option value="">Select a member…</option>{members.map(m => <option key={m.id} value={m.id}>{m.full_name}</option>)}</select></Field>
+        <Field label="To"><select value={to} onChange={e => setTo(e.target.value)} style={inputStyle}><option value="">Select a member…</option>{members.filter(m => m.id !== from).map(m => <option key={m.id} value={m.id}>{m.full_name}</option>)}</select></Field>
+        <Field label="Amount (UGX)"><input type="number" min="0" value={amount} onChange={e => setAmount(e.target.value)} style={inputStyle} /></Field>
+        <Field label="Note"><input value={note} onChange={e => setNote(e.target.value)} style={inputStyle} placeholder="Optional" /></Field>
+        <PrimaryButton disabled={busy || !ok} onClick={async () => { setBusy(true); try { const r = await onSubmit(from, to, amount, note); if (r) { setAmount(''); setNote(''); } } finally { setBusy(false); } }}>Transfer shares</PrimaryButton>
+      </div>
+    </Card>
+  );
+}
+
+function ReleaseSavingsCard({ members, onSubmit }) {
+  const [member, setMember] = useState(''); const [kind, setKind] = useState('compulsory'); const [amount, setAmount] = useState(''); const [note, setNote] = useState(''); const [busy, setBusy] = useState(false);
+  return (
+    <Card>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2 }}>Release held savings</div>
+      <p style={{ fontSize: 11.5, color: THEME.inkSoft, margin: '0 0 10px' }}>Moves compulsory or non-withdrawable savings into the member's withdrawable balance, for example when they leave. Manager only.</p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <Field label="Member"><select value={member} onChange={e => setMember(e.target.value)} style={inputStyle}><option value="">Select a member…</option>{members.map(m => <option key={m.id} value={m.id}>{m.full_name}</option>)}</select></Field>
+        <Field label="Release from"><select value={kind} onChange={e => setKind(e.target.value)} style={inputStyle}><option value="compulsory">Compulsory savings</option><option value="non_withdrawable">Non-withdrawable deposits</option></select></Field>
+        <Field label="Amount (UGX)"><input type="number" min="0" value={amount} onChange={e => setAmount(e.target.value)} style={inputStyle} /></Field>
+        <Field label="Reason"><input value={note} onChange={e => setNote(e.target.value)} style={inputStyle} placeholder="e.g. Member exit" /></Field>
+        <PrimaryButton disabled={busy || !member || !(Number(amount) > 0)} onClick={async () => { setBusy(true); try { const r = await onSubmit(member, kind, amount, note); if (r) { setAmount(''); setNote(''); } } finally { setBusy(false); } }}>Release</PrimaryButton>
+      </div>
+    </Card>
+  );
+}
+
+function ApprovalLimitCard({ value, onSave }) {
+  const [v, setV] = useState(String(value));
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setV(String(value)); }, [value]);
+  return (
+    <Card>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2 }}>Approval limit</div>
+      <p style={{ fontSize: 11.5, color: THEME.inkSoft, margin: '0 0 10px' }}>
+        Deposits, withdrawals and share purchases of this amount or more, entered by a cashier, wait for a manager to approve.
+      </p>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input type="number" min="0" value={v} onChange={e => setV(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+        <PrimaryButton disabled={busy || v === '' || Number(v) < 0 || Number(v) === Number(value)} onClick={async () => {
+          setBusy(true); try { await onSave(v); } finally { setBusy(false); }
+        }}>Save</PrimaryButton>
       </div>
     </Card>
   );
@@ -2573,7 +2691,7 @@ function DeclareDividendForm({ totalShares, onSubmit }) {
         <Field label="Total pool (UGX)"><input type="number" min="1" value={pool} onChange={e => setPool(e.target.value)} style={inputStyle} /></Field>
         <PrimaryButton disabled={busy || !pool} onClick={async () => {
           setBusy(true);
-          try { await onSubmit(year, pool); setPool(''); } finally { setBusy(false); }
+          try { const ok = await onSubmit(year, pool); if (ok) setPool(''); } finally { setBusy(false); }
         }}>{busy ? <Loader2 size={15} className="spin" /> : 'Declare & allocate'}</PrimaryButton>
       </div>
     </Card>
@@ -2794,7 +2912,11 @@ export default function App() {
   useEffect(() => {
     try {
       if (session && profile) sessionStorage.setItem(SESSION_KEY, JSON.stringify({ session, profile }));
-      else sessionStorage.removeItem(SESSION_KEY);
+      else {
+        sessionStorage.removeItem(SESSION_KEY);
+        // signed out: also drop any cached app files/data so the next person on this device starts clean
+        if (typeof caches !== 'undefined') caches.keys().then(keys => keys.forEach(k => caches.delete(k))).catch(() => {});
+      }
     } catch { /* storage unavailable — session just won't persist across refresh */ }
   }, [session, profile]);
 

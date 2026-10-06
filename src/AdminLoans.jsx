@@ -605,6 +605,7 @@ function LoanFile({ loan, loans, products, token, profile, perms, approvalLimit,
   const [ok, setOk] = useState('');
   const [payAmt, setPayAmt] = useState('');
   const [payMode, setPayMode] = useState('cash');
+  const [payRef, setPayRef] = useState('');
   const [payNote, setPayNote] = useState('');
   const [note, setNote] = useState('');
   const [noteVisible, setNoteVisible] = useState(false);
@@ -829,11 +830,15 @@ function LoanFile({ loan, loans, products, token, profile, perms, approvalLimit,
             <input type="number" placeholder="Amount (UGX)" value={payAmt} onChange={e => setPayAmt(e.target.value)} style={input} />
             <select value={payMode} onChange={e => setPayMode(e.target.value)} style={input}>{MODES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
           </div>
+          {['mobile_money', 'bank_transfer', 'cheque'].includes(payMode) && (
+            <input placeholder={payMode === 'mobile_money' ? 'Mobile money transaction ID (required)' : payMode === 'cheque' ? 'Cheque number' : 'Bank reference'}
+              value={payRef} onChange={e => setPayRef(e.target.value)} autoComplete="off" style={{ ...input, marginTop: 8 }} />
+          )}
           <input placeholder="Note (optional), e.g. receipt number" value={payNote} onChange={e => setPayNote(e.target.value)} style={{ ...input, marginTop: 8 }} />
           <div style={{ fontSize: 11.5, color: THEME.inkSoft, margin: '6px 0' }}>Penalties are cleared first, then interest, then principal, oldest installment first.</div>
-          <Pill disabled={busy || !(Number(payAmt) > 0)} onClick={() => act(async () => {
-            const r = await rpc(kit, token, 'record_loan_payment', { p_loan: id, p_amount: Number(payAmt), p_mode: payMode, p_note: payNote || null });
-            setPayAmt(''); setPayNote('');
+          <Pill disabled={busy || !(Number(payAmt) > 0) || (payMode === 'mobile_money' && !payRef.trim())} onClick={() => act(async () => {
+            const r = await rpc(kit, token, 'record_loan_payment_checked', { p_loan: id, p_amount: Number(payAmt), p_mode: payMode, p_reference: payRef.trim() || null, p_note: payNote || null });
+            setPayAmt(''); setPayNote(''); setPayRef('');
             if (r && r.closed) setOk('Payment recorded. The loan is now fully repaid.');
           }, 'Payment recorded.')} style={{ justifyContent: 'center' }}>Record payment</Pill>
         </div>
